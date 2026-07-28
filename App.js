@@ -1,3 +1,4 @@
+// App.js
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, 
@@ -18,8 +19,14 @@ import {
   FileSpreadsheet, PlusCircle, LogOut, User, Lock, TrendingUp, ShippingContainer, Clock
 } from 'lucide-react-native';
 
+// Agent Architecture Import
+import { useAgentSystem } from './src/agents/AgentBridge';
+
 SplashScreen.preventAutoHideAsync();
 const { width, height } = Dimensions.get('window');
+
+// API Key for local development/testing
+const OPENAI_API_KEY = 'YOUR_OPENAI_API_KEY_HERE';
 
 // ==========================================
 // DATA METRIC ROUTING GRAPH MAP DATA
@@ -38,7 +45,7 @@ let GLOBAL_AUTH_SESSION = { username: '', password: '', isLoggedIn: false };
 const LoginScreen = ({ onLoginSuccess }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [authStage, setAuthStage] = useState('IDLE'); // IDLE -> VALIDATING -> SUCCESS_SPLASH
+  const [authStage, setAuthStage] = useState('IDLE');
 
   const executeAuthPipeline = () => {
     if (!username.trim() || !password.trim()) {
@@ -48,12 +55,10 @@ const LoginScreen = ({ onLoginSuccess }) => {
 
     setAuthStage('VALIDATING');
 
-    // Simulate High-Speed Database Underwriting Cryptography Verification
     setTimeout(() => {
       GLOBAL_AUTH_SESSION = { username, password, isLoggedIn: true };
       setAuthStage('SUCCESS_SPLASH');
 
-      // Cinematic Hold time for the custom Welcome Splash sequence
       setTimeout(() => {
         onLoginSuccess();
       }, 2500);
@@ -123,7 +128,6 @@ const LoginScreen = ({ onLoginSuccess }) => {
 const DashboardScreen = () => {
   const [activeChartFilter, setActiveChartFilter] = useState('LEADS');
   
-  // Interactive Live Metrics Engine Data Mocked Exactly matching Ogamoto Web Architecture
   const metricsData = {
     LEADS: [
       { month: 'Jan', total: 42 }, { month: 'Feb', total: 68 }, 
@@ -139,7 +143,6 @@ const DashboardScreen = () => {
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20 }}>
       <Text style={styles.sectionHeading}>Live Engine Command Stack</Text>
       
-      {/* High-End Analytics Mini Widget List Matrices */}
       <View style={styles.statsRow}>
         <TouchableOpacity style={[styles.dashboardMetricItem, activeChartFilter === 'LEADS' && styles.activeItemCard]} onPress={() => setActiveChartFilter('LEADS')}>
           <TrendingUp size={18} color={activeChartFilter === 'LEADS' ? '#00E5FF' : '#555'} />
@@ -154,7 +157,6 @@ const DashboardScreen = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Premium Visual Animated Graph Node */}
       <Text style={styles.sectionSubHeading}>Dynamic Vector Tracking Metrics ({activeChartFilter})</Text>
       <View style={styles.graphContainerCanvas}>
         <View style={styles.graphBarsAxisContainer}>
@@ -177,19 +179,17 @@ const DashboardScreen = () => {
 };
 
 // ==========================================
-// 3. SECURE PASS-THROUGH WEBVIEW (AUTOMATED TWIST)
+// 3. SECURE PASS-THROUGH WEBVIEW
 // ==========================================
 const CRMWebViewScreen = () => {
   const [loading, setLoading] = useState(true);
   const webRef = useRef(null);
 
-  // The Twist Injection Loop: Inject script directly inside global DOM structure elements
   const executeAutologinInjectionScript = () => {
     if (!GLOBAL_AUTH_SESSION.isLoggedIn) return;
 
     const scriptPayload = `
       (function() {
-        // Look for targeted identification parameters matching Ogamoto fields
         const emailInput = document.querySelector('input[type="email"]') || document.querySelector('input[name="email"]');
         const passwordInput = document.querySelector('input[type="password"]') || document.querySelector('input[name="password"]');
         const submitBtn = document.querySelector('button[type="submit"]');
@@ -198,7 +198,6 @@ const CRMWebViewScreen = () => {
           emailInput.value = "${GLOBAL_AUTH_SESSION.username}";
           passwordInput.value = "${GLOBAL_AUTH_SESSION.password}";
           
-          // Trigger form frameworks change recognition states safely
           emailInput.dispatchEvent(new Event('input', { bubbles: true }));
           passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
           
@@ -207,7 +206,6 @@ const CRMWebViewScreen = () => {
       })();
     `;
 
-    // High Speed evaluation injector pipeline
     setTimeout(() => {
       webRef.current?.injectJavaScript(scriptPayload);
     }, 1000);
@@ -235,28 +233,42 @@ const CRMWebViewScreen = () => {
 };
 
 // ==========================================
-// 4. MAYA AI INTEGRAL CHAT INTERFACE
+// 4. MAYA AI INTEGRAL CHAT INTERFACE (CONNECTED TO AGENT BRIDGE)
 // ==========================================
-// Keeping the complete chatbot state pipeline matching your functional custom platform build
 const MayaAgentConsoleScreen = () => {
   const [messages, setMessages] = useState([
     { id: '1', text: 'Hi Admin! Maya Core System Sync Channels are fully active natively. Database structure routes are cleanly mapped across all entities.', isBot: true }
   ]);
   const [inputText, setInputText] = useState('');
+  const { processDirective, loading } = useAgentSystem(OPENAI_API_KEY);
 
-  const submitTerminalMessage = () => {
-    if (!inputText.trim()) return;
+  const submitTerminalMessage = async () => {
+    if (!inputText.trim() || loading) return;
     const currentInput = inputText;
+    
+    // 1. Render user message
     setMessages(prev => [...prev, { id: Date.now().toString(), text: currentInput, isBot: false }]);
     setInputText('');
 
-    setTimeout(() => {
-      setMessages(prev => [...prev, { 
-        id: Date.now().toString(), 
-        text: `🤖 **Maya Processing Node Sync Output**:\nCommand received. Evaluated parameter parameters token string values successfully. Data structure verified inside active CRM matrix row arrays.`, 
-        isBot: true 
-      }]);
-    }, 1000);
+    // 2. Process directive through Maya & Aether
+    const agentResponse = await processDirective(currentInput);
+
+    if (agentResponse) {
+      let responseText = agentResponse.advice;
+      
+      if (agentResponse.executedTask?.filePath) {
+        responseText += `\n\n📄 **Document Generated**: ${agentResponse.executedTask.filePath}`;
+      }
+
+      setMessages(prev => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          text: responseText,
+          isBot: true,
+        },
+      ]);
+    }
   };
 
   return (
@@ -271,6 +283,11 @@ const MayaAgentConsoleScreen = () => {
           </View>
         )}
       />
+      {loading && (
+        <View style={{ paddingHorizontal: 20, paddingBottom: 10 }}>
+          <ActivityIndicator size="small" color="#00E5FF" />
+        </View>
+      )}
       <View style={styles.inputContainer}>
         <TextInput 
           style={styles.chatInput} 
@@ -278,8 +295,9 @@ const MayaAgentConsoleScreen = () => {
           placeholderTextColor="#444" 
           value={inputText}
           onChangeText={setInputText}
+          editable={!loading}
         />
-        <TouchableOpacity style={styles.sendButton} onPress={submitTerminalMessage}>
+        <TouchableOpacity style={styles.sendButton} onPress={submitTerminalMessage} disabled={loading}>
           <Send size={14} color="#09090b" />
         </TouchableOpacity>
       </View>
@@ -406,14 +424,12 @@ const styles = StyleSheet.create({
   loaderContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: '#09090b', zIndex: 10 },
   loadingText: { marginTop: 16, color: '#00E5FF', fontSize: 12, letterSpacing: 1, fontWeight: '600' },
   
-  // Cinematic Flash / Welcome Elements
   splashContainer: { flex: 1, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
   splashLogoText: { fontSize: 38, fontWeight: '900', color: '#00E5FF', letterSpacing: 10 },
   successSplashContainer: { flex: 1, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
   successSplashTitle: { fontSize: 26, fontWeight: '900', color: '#fff', letterSpacing: 4, marginTop: 20 },
   successSplashSubtitle: { fontSize: 12, color: '#00E5FF', marginTop: 8, opacity: 0.8, letterSpacing: 1 },
   
-  // Custom Login Visual Form Layout Rules
   loginContainer: { flex: 1, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
   loginCard: { width: width * 0.85, padding: 30, backgroundColor: '#101014', borderRadius: 24, borderWidth: 1, borderColor: '#1a1a22' },
   loginBrandText: { fontSize: 32, fontWeight: '900', color: '#00E5FF', textAlign: 'center', letterSpacing: 6 },
@@ -424,7 +440,6 @@ const styles = StyleSheet.create({
   loginSubmitButton: { backgroundColor: '#00E5FF', height: 52, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
   loginButtonText: { color: '#09090b', fontWeight: '800', fontSize: 13, letterSpacing: 1 },
 
-  // Dashboard Interface Element Visuals
   sectionHeading: { fontSize: 22, fontWeight: '800', color: '#fff', marginBottom: 20 },
   sectionSubHeading: { fontSize: 13, fontWeight: '600', color: '#00E5FF', marginTop: 24, marginBottom: 16, textTransform: 'uppercase', letterSpacing: 1 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
@@ -435,7 +450,6 @@ const styles = StyleSheet.create({
   systemStatusLedgerAlertBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 16, borderRadius: 14, marginTop: 24, borderWidth: 1, borderColor: '#1a1a22' },
   statusBoxMetaText: { color: '#888', fontSize: 12, flex: 1, lineHeight: 18 },
 
-  // Interactive Custom Analytics Vector Grid Frame Canvas
   graphContainerCanvas: { backgroundColor: '#101014', padding: 24, borderRadius: 20, borderWidth: 1, borderColor: '#1a1a22', height: 220, justifyContent: 'flex-end' },
   graphBarsAxisContainer: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'flex-end', width: '100%' },
   individualBarColumn: { alignItems: 'center' },
@@ -443,7 +457,6 @@ const styles = StyleSheet.create({
   barMarkerLabels: { color: '#444', fontSize: 11, marginTop: 10, fontWeight: '700' },
   barMarkerValueText: { color: '#fff', fontSize: 10, position: 'absolute', top: -20, fontWeight: '600' },
 
-  // Native Operational Chat Streams Bubble Elements
   msgBubble: { padding: 14, borderRadius: 18, marginVertical: 6, maxWidth: '85%' },
   botBubble: { backgroundColor: '#101014', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#1a1a22' },
   userBubble: { backgroundColor: '#00E5FF', alignSelf: 'flex-end' },
@@ -452,14 +465,12 @@ const styles = StyleSheet.create({
   chatInput: { flex: 1, backgroundColor: '#101014', color: '#fff', paddingHorizontal: 18, height: 48, borderRadius: 24, marginRight: 12, borderWidth: 1, borderColor: '#1a1a22' },
   sendButton: { backgroundColor: '#00E5FF', width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
 
-  // Reports Structural Ledger Card List Design Layout
   reportRowItemCard: { backgroundColor: '#101014', padding: 16, borderRadius: 16, marginBottom: 12, borderWidth: 1, borderColor: '#1a1a22' },
   reportItemHeaderTitle: { color: '#fff', fontWeight: '700', fontSize: 14 },
   reportItemTimestampMeta: { color: '#444', fontSize: 11, marginTop: 4, fontWeight: '500' },
   floatingActionButtonPlus: { flexDirection: 'row', backgroundColor: '#00E5FF', position: 'absolute', bottom: 25, left: 20, right: 20, height: 54, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   fabTextLabel: { color: '#09090b', fontWeight: '800', fontSize: 12, marginLeft: 10, letterSpacing: 1 },
 
-  // Drawer Profile Layout Setup Elements
   drawerHeaderBrandingProfileContainer: { padding: 24, borderBottomWidth: 1, borderBottomColor: '#1a1a22', marginBottom: 12, marginTop: 20 },
   drawerMainHeadingTitle: { fontSize: 24, fontWeight: '900', color: '#00E5FF', letterSpacing: 4 },
   drawerSubHeadingMetaLabel: { color: '#444', fontSize: 11, marginTop: 2, fontWeight: '600', textTransform: 'uppercase' }
