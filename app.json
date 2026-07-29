@@ -21,11 +21,11 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {
-      "eas": {
-        "projectId": "32189ba3-1f13-4546-9359-46dcbff374b6"
-      }
-    },
+      "extra": {
+    "eas": {
+      "projectId": "560dfaec-4bbe-44d7-8549-7068b15461dc"
+    }
+  },
     "plugins": [
       "expo-sharing",
       "expo-splash-screen"
