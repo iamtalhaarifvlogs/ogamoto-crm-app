@@ -24,7 +24,7 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 // ==========================================
-// 1. STABLE & BULLETPROOF LOGIN SCREEN
+// 1. LOGIN SCREEN
 // ==========================================
 const LoginScreen = ({ navigation }) => {
   const [username, setUsername] = useState('john@gmail.com');
@@ -35,7 +35,6 @@ const LoginScreen = ({ navigation }) => {
       Alert.alert("Authentication Error", "Please enter valid credentials.");
       return;
     }
-    // Perform a clean stack reset into the main tab navigator
     navigation.reset({
       index: 0,
       routes: [{ name: 'MainDashboard' }],
@@ -87,7 +86,7 @@ const LoginScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 2. EXECUTIVE DASHBOARD SCREEN
+// 2. DASHBOARD SCREEN
 // ==========================================
 const DashboardScreen = ({ navigation }) => {
   const [activeChartFilter, setActiveChartFilter] = useState('LEADS');
@@ -171,7 +170,7 @@ const DashboardScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 3. SECURE CRM WEBVIEW PORTAL
+// 3. CRM WEBVIEW PORTAL
 // ==========================================
 const CRMWebViewScreen = () => (
   <SafeAreaView style={styles.container}>
@@ -185,7 +184,7 @@ const CRMWebViewScreen = () => (
 );
 
 // ==========================================
-// 4. MAYA AI CONSOLE (WITH TYPEWRITER EFFECT)
+// 4. MAYA AI CONSOLE
 // ==========================================
 const MayaAgentConsoleScreen = () => {
   const [messages, setMessages] = useState([
@@ -263,7 +262,7 @@ const MayaAgentConsoleScreen = () => {
 };
 
 // ==========================================
-// 5. STABLE BOTTOM TAB NAVIGATOR
+// 5. TAB NAVIGATOR
 // ==========================================
 function MainTabNavigator() {
   return (
@@ -297,7 +296,7 @@ function MainTabNavigator() {
 }
 
 // ==========================================
-// 6. ROOT APP ENTRYPOINT
+// 6. ROOT APP
 // ==========================================
 export default function App() {
   return (
@@ -349,5 +348,4 @@ const styles = StyleSheet.create({
   inputContainer: { flexDirection: 'row', padding: 16, backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', alignItems: 'center' },
   chatInput: { flex: 1, backgroundColor: '#101014', color: '#fff', paddingHorizontal: 18, height: 48, borderRadius: 24, marginRight: 12, borderWidth: 1, borderColor: '#1a1a22' },
   sendButton: { backgroundColor: '#00E5FF', width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' }
-}
-                
+});
