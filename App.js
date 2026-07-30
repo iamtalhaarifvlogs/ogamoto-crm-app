@@ -1,30 +1,30 @@
-// App.js
+// App.js - OGAMOTO Enterprise Portal
 import 'react-native-gesture-handler';
 import React, { useState, useRef } from 'react';
 import { 
   View, Text, StyleSheet, TextInput, TouchableOpacity, 
-  Dimensions, FlatList, KeyboardAvoidingView, Platform, Alert, ScrollView 
+  Dimensions, FlatList, KeyboardAvoidingView, Platform, Alert, ScrollView, SafeAreaView 
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createDrawerNavigator } from '@react-navigation/drawer';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { WebView } from 'react-native-webview';
 
-// Icons
+// Vector Icons
 import { 
   Bot, Send, LogIn, LayoutDashboard, Globe, 
-  FileSpreadsheet, PlusCircle, User, Lock, TrendingUp, ShippingContainer, Clock, Layers
+  User, Lock, TrendingUp, ShippingContainer, Layers, LogOut
 } from 'lucide-react-native';
 
 import { MayaAgent } from './src/agents/Maya';
 
 const { width } = Dimensions.get('window');
 const Stack = createNativeStackNavigator();
-const Drawer = createDrawerNavigator();
+const Tab = createBottomTabNavigator();
 
 // ==========================================
-// 1. STABLE LOGIN SCREEN
+// 1. STABLE & BULLETPROOF LOGIN SCREEN
 // ==========================================
 const LoginScreen = ({ navigation }) => {
   const [username, setUsername] = useState('john@gmail.com');
@@ -32,62 +32,64 @@ const LoginScreen = ({ navigation }) => {
 
   const handleLogin = () => {
     if (!username.trim() || !password.trim()) {
-      Alert.alert("Authentication Failed", "Please enter valid credentials.");
+      Alert.alert("Authentication Error", "Please enter valid credentials.");
       return;
     }
-    // Safely navigate to MainApp via Stack Router without unmounting state errors
+    // Perform a clean stack reset into the main tab navigator
     navigation.reset({
       index: 0,
-      routes: [{ name: 'MainApp' }],
+      routes: [{ name: 'MainDashboard' }],
     });
   };
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.loginContainer}>
-      <View style={styles.loginCard}>
-        <Text style={styles.loginBrandText}>OGAMOTO</Text>
-        <Text style={styles.loginTagline}>ENTERPRISE SYSTEM PORTAL</Text>
+    <SafeAreaView style={styles.loginContainer}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' }}>
+        <View style={styles.loginCard}>
+          <Text style={styles.loginBrandText}>OGAMOTO</Text>
+          <Text style={styles.loginTagline}>ENTERPRISE SYSTEM PORTAL</Text>
 
-        <View style={styles.inputWrapper}>
-          <User size={16} color="#00E5FF" style={styles.inputIcon} />
-          <TextInput 
-            style={styles.authInputField} 
-            placeholder="Admin Email" 
-            placeholderTextColor="#444"
-            value={username}
-            onChangeText={setUsername}
-            autoCapitalize="none"
-          />
-        </View>
-
-        <View style={styles.inputWrapper}>
-          <Lock size={16} color="#00E5FF" style={styles.inputIcon} />
-          <TextInput 
-            style={styles.authInputField} 
-            placeholder="Password" 
-            placeholderTextColor="#444"
-            secureTextEntry
-            value={password}
-            onChangeText={setPassword}
-            autoCapitalize="none"
-          />
-        </View>
-
-        <TouchableOpacity style={styles.loginSubmitButton} onPress={handleLogin} activeOpacity={0.8}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <LogIn size={16} color="#09090b" style={{ marginRight: 8 }} />
-            <Text style={styles.loginButtonText}>INITIALIZE INTERFACE</Text>
+          <View style={styles.inputWrapper}>
+            <User size={16} color="#00E5FF" style={styles.inputIcon} />
+            <TextInput 
+              style={styles.authInputField} 
+              placeholder="Admin Identifier" 
+              placeholderTextColor="#444"
+              value={username}
+              onChangeText={setUsername}
+              autoCapitalize="none"
+            />
           </View>
-        </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
+
+          <View style={styles.inputWrapper}>
+            <Lock size={16} color="#00E5FF" style={styles.inputIcon} />
+            <TextInput 
+              style={styles.authInputField} 
+              placeholder="Access Key" 
+              placeholderTextColor="#444"
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+              autoCapitalize="none"
+            />
+          </View>
+
+          <TouchableOpacity style={styles.loginSubmitButton} onPress={handleLogin} activeOpacity={0.85}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <LogIn size={16} color="#09090b" style={{ marginRight: 8 }} />
+              <Text style={styles.loginButtonText}>INITIALIZE INTERFACE</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
 // ==========================================
 // 2. EXECUTIVE DASHBOARD SCREEN
 // ==========================================
-const DashboardScreen = () => {
+const DashboardScreen = ({ navigation }) => {
   const [activeChartFilter, setActiveChartFilter] = useState('LEADS');
   
   const analytics = {
@@ -105,60 +107,85 @@ const DashboardScreen = () => {
     ]
   };
 
+  const handleLogout = () => {
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'Login' }],
+    });
+  };
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ padding: 20 }}>
-      <Text style={styles.sectionHeading}>Executive Command Stack</Text>
-
-      <View style={styles.statsRow}>
-        <TouchableOpacity style={[styles.dashboardMetricItem, activeChartFilter === 'LEADS' && styles.activeItemCard]} onPress={() => setActiveChartFilter('LEADS')}>
-          <TrendingUp size={18} color={activeChartFilter === 'LEADS' ? '#00E5FF' : '#555'} />
-          <Text style={styles.dashboardMetricNumber}>$1.25M</Text>
-          <Text style={styles.dashboardMetricLabel}>Active Lead Valuation</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={[styles.dashboardMetricItem, activeChartFilter === 'SHIPMENTS' && styles.activeItemCard]} onPress={() => setActiveChartFilter('SHIPMENTS')}>
-          <ShippingContainer size={18} color={activeChartFilter === 'SHIPMENTS' ? '#00E5FF' : '#555'} />
-          <Text style={styles.dashboardMetricNumber}>765</Text>
-          <Text style={styles.dashboardMetricLabel}>Sea Cargo Manifests</Text>
-        </TouchableOpacity>
-      </View>
-
-      <Text style={styles.sectionSubHeading}>Analytical Performance Vector ({activeChartFilter})</Text>
-      <View style={styles.graphContainerCanvas}>
-        <View style={styles.graphBarsAxisContainer}>
-          {analytics[activeChartFilter].map((item, index) => (
-            <View key={index} style={styles.individualBarColumn}>
-              <Text style={styles.barMarkerValueText}>{item.value}</Text>
-              <View style={[styles.interactiveChartBarLine, { height: item.height }]} />
-              <Text style={styles.barMarkerLabels}>{item.label}</Text>
-            </View>
-          ))}
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={{ padding: 20 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <Text style={styles.sectionHeading}>Executive Command</Text>
+          <TouchableOpacity style={styles.logoutIconButton} onPress={handleLogout}>
+            <LogOut size={16} color="#ff4444" />
+          </TouchableOpacity>
         </View>
-      </View>
 
-      <Text style={styles.sectionSubHeading}>Financing Partner Ledger</Text>
-      <View style={styles.systemStatusLedgerAlertBox}>
-        <Layers size={18} color="#00E5FF" style={{ marginRight: 12 }} />
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Habib Bank Credit Line</Text>
-          <Text style={{ color: '#888', fontSize: 11, marginTop: 2 }}>Limit: $500,000 | Interest Rate: 8.5% | Active</Text>
+        <View style={styles.statsRow}>
+          <TouchableOpacity 
+            style={[styles.dashboardMetricItem, activeChartFilter === 'LEADS' && styles.activeItemCard]} 
+            onPress={() => setActiveChartFilter('LEADS')}
+          >
+            <TrendingUp size={18} color={activeChartFilter === 'LEADS' ? '#00E5FF' : '#555'} />
+            <Text style={styles.dashboardMetricNumber}>$1.25M</Text>
+            <Text style={styles.dashboardMetricLabel}>Active Lead Valuation</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[styles.dashboardMetricItem, activeChartFilter === 'SHIPMENTS' && styles.activeItemCard]} 
+            onPress={() => setActiveChartFilter('SHIPMENTS')}
+          >
+            <ShippingContainer size={18} color={activeChartFilter === 'SHIPMENTS' ? '#00E5FF' : '#555'} />
+            <Text style={styles.dashboardMetricNumber}>765</Text>
+            <Text style={styles.dashboardMetricLabel}>Sea Cargo Manifests</Text>
+          </TouchableOpacity>
         </View>
-      </View>
-    </ScrollView>
+
+        <Text style={styles.sectionSubHeading}>Analytical Vector ({activeChartFilter})</Text>
+        <View style={styles.graphContainerCanvas}>
+          <View style={styles.graphBarsAxisContainer}>
+            {analytics[activeChartFilter].map((item, index) => (
+              <View key={index} style={styles.individualBarColumn}>
+                <Text style={styles.barMarkerValueText}>{item.value}</Text>
+                <View style={[styles.interactiveChartBarLine, { height: item.height }]} />
+                <Text style={styles.barMarkerLabels}>{item.label}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        <Text style={styles.sectionSubHeading}>Financing Partner Ledger</Text>
+        <View style={styles.systemStatusLedgerAlertBox}>
+          <Layers size={18} color="#00E5FF" style={{ marginRight: 12 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Habib Bank Credit Line</Text>
+            <Text style={{ color: '#888', fontSize: 11, marginTop: 2 }}>Limit: $500,000 | Interest Rate: 8.5% | Active</Text>
+          </View>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 };
 
 // ==========================================
-// 3. WEBVIEW PORTAL
+// 3. SECURE CRM WEBVIEW PORTAL
 // ==========================================
 const CRMWebViewScreen = () => (
-  <View style={styles.container}>
-    <WebView source={{ uri: 'https://pap-crm.vercel.app/' }} style={styles.webview} />
-  </View>
+  <SafeAreaView style={styles.container}>
+    <WebView 
+      source={{ uri: 'https://pap-crm.vercel.app/' }} 
+      style={styles.webview}
+      startInLoadingState={true}
+      scalesPageToFit={true}
+    />
+  </SafeAreaView>
 );
 
 // ==========================================
-// 4. MAYA CONSOLE WITH TYPING EFFECT
+// 4. MAYA AI CONSOLE (WITH TYPEWRITER EFFECT)
 // ==========================================
 const MayaAgentConsoleScreen = () => {
   const [messages, setMessages] = useState([
@@ -200,72 +227,85 @@ const MayaAgentConsoleScreen = () => {
   };
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90} style={styles.container}>
-      <FlatList
-        data={messages}
-        keyExtractor={item => item.id}
-        contentContainerStyle={{ padding: 20 }}
-        renderItem={({ item }) => (
-          <View style={[styles.msgBubble, item.isBot ? styles.botBubble : styles.userBubble]}>
-            <Text style={styles.msgText}>{item.text}</Text>
+    <SafeAreaView style={styles.container}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90} style={{ flex: 1 }}>
+        <FlatList
+          data={messages}
+          keyExtractor={item => item.id}
+          contentContainerStyle={{ padding: 20 }}
+          renderItem={({ item }) => (
+            <View style={[styles.msgBubble, item.isBot ? styles.botBubble : styles.userBubble]}>
+              <Text style={styles.msgText}>{item.text}</Text>
+            </View>
+          )}
+        />
+        {isTyping && (
+          <View style={{ paddingHorizontal: 20, paddingBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
+            <Bot size={14} color="#00E5FF" style={{ marginRight: 6 }} />
+            <Text style={{ color: '#00E5FF', fontSize: 11 }}>Maya is processing query...</Text>
           </View>
         )}
-      />
-      {isTyping && (
-        <View style={{ paddingHorizontal: 20, paddingBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
-          <Bot size={14} color="#00E5FF" style={{ marginRight: 6 }} />
-          <Text style={{ color: '#00E5FF', fontSize: 11 }}>Maya is formulating advice...</Text>
+        <View style={styles.inputContainer}>
+          <TextInput 
+            style={styles.chatInput} 
+            placeholder="Command Maya..." 
+            placeholderTextColor="#444" 
+            value={inputText}
+            onChangeText={setInputText}
+          />
+          <TouchableOpacity style={styles.sendButton} onPress={handleSend} disabled={isTyping}>
+            <Send size={14} color="#09090b" />
+          </TouchableOpacity>
         </View>
-      )}
-      <View style={styles.inputContainer}>
-        <TextInput 
-          style={styles.chatInput} 
-          placeholder="Command Maya..." 
-          placeholderTextColor="#444" 
-          value={inputText}
-          onChangeText={setInputText}
-        />
-        <TouchableOpacity style={styles.sendButton} onPress={handleSend} disabled={isTyping}>
-          <Send size={14} color="#09090b" />
-        </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
 // ==========================================
-// 5. DRAWER NAVIGATOR
+// 5. STABLE BOTTOM TAB NAVIGATOR
 // ==========================================
-function DrawerNavigator() {
+function MainTabNavigator() {
   return (
-    <Drawer.Navigator
+    <Tab.Navigator
       screenOptions={{
         headerShown: true,
         headerStyle: { backgroundColor: '#09090b', borderBottomWidth: 1, borderBottomColor: '#1a1a22' },
         headerTintColor: '#00E5FF',
-        drawerStyle: { backgroundColor: '#09090b' },
-        drawerLabelStyle: { color: '#fff', fontWeight: '600' },
-        drawerActiveTintColor: '#00E5FF',
-        drawerActiveBackgroundColor: '#101014'
+        tabBarStyle: { backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', height: 60, paddingBottom: 8 },
+        tabBarActiveTintColor: '#00E5FF',
+        tabBarInactiveTintColor: '#555',
       }}
     >
-      <Drawer.Screen name="Dashboard" component={DashboardScreen} options={{ drawerIcon: () => <LayoutDashboard size={16} color="#00E5FF" /> }} />
-      <Drawer.Screen name="Maya AI" component={MayaAgentConsoleScreen} options={{ drawerIcon: () => <Bot size={16} color="#00E5FF" /> }} />
-      <Drawer.Screen name="CRM Portal" component={CRMWebViewScreen} options={{ drawerIcon: () => <Globe size={16} color="#00E5FF" /> }} />
-    </Drawer.Navigator>
+      <Tab.Screen 
+        name="Dashboard" 
+        component={DashboardScreen} 
+        options={{ tabBarIcon: ({ color }) => <LayoutDashboard size={20} color={color} /> }} 
+      />
+      <Tab.Screen 
+        name="Maya AI" 
+        component={MayaAgentConsoleScreen} 
+        options={{ tabBarIcon: ({ color }) => <Bot size={20} color={color} /> }} 
+      />
+      <Tab.Screen 
+        name="CRM Portal" 
+        component={CRMWebViewScreen} 
+        options={{ tabBarIcon: ({ color }) => <Globe size={20} color={color} /> }} 
+      />
+    </Tab.Navigator>
   );
 }
 
 // ==========================================
-// 6. ROOT APP ENTRY WITH GESTURE WRAPPER
+// 6. ROOT APP ENTRYPOINT
 // ==========================================
 export default function App() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#09090b' }}>
       <NavigationContainer>
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen name="Login" component={LoginScreen} />
-          <Stack.Screen name="MainApp" component={DrawerNavigator} />
+          <Stack.Screen name="MainDashboard" component={MainTabNavigator} />
         </Stack.Navigator>
       </NavigationContainer>
     </GestureHandlerRootView>
@@ -273,7 +313,7 @@ export default function App() {
 }
 
 // ==========================================
-// STYLES
+// STYLESHEET
 // ==========================================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#09090b' },
@@ -287,7 +327,8 @@ const styles = StyleSheet.create({
   authInputField: { flex: 1, height: 50, color: '#fff', fontSize: 14 },
   loginSubmitButton: { backgroundColor: '#00E5FF', height: 52, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
   loginButtonText: { color: '#09090b', fontWeight: '800', fontSize: 13, letterSpacing: 1 },
-  sectionHeading: { fontSize: 22, fontWeight: '800', color: '#fff', marginBottom: 20 },
+  logoutIconButton: { padding: 8, backgroundColor: '#1a1014', borderRadius: 8, borderWidth: 1, borderColor: '#331111' },
+  sectionHeading: { fontSize: 22, fontWeight: '800', color: '#fff' },
   sectionSubHeading: { fontSize: 12, fontWeight: '700', color: '#00E5FF', marginTop: 24, marginBottom: 16, letterSpacing: 1 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
   dashboardMetricItem: { backgroundColor: '#101014', width: '48%', padding: 18, borderRadius: 18, borderWidth: 1, borderColor: '#1a1a22' },
@@ -308,4 +349,5 @@ const styles = StyleSheet.create({
   inputContainer: { flexDirection: 'row', padding: 16, backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', alignItems: 'center' },
   chatInput: { flex: 1, backgroundColor: '#101014', color: '#fff', paddingHorizontal: 18, height: 48, borderRadius: 24, marginRight: 12, borderWidth: 1, borderColor: '#1a1a22' },
   sendButton: { backgroundColor: '#00E5FF', width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' }
-});
+}
+                
