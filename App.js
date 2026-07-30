@@ -1,39 +1,45 @@
 // App.js
 import 'react-native-gesture-handler';
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   View, Text, StyleSheet, TextInput, TouchableOpacity, 
   Dimensions, FlatList, KeyboardAvoidingView, Platform, Alert, ScrollView 
 } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer } from '@react-navigation/native';
-import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList } from '@react-navigation/drawer';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createDrawerNavigator } from '@react-navigation/drawer';
 import { WebView } from 'react-native-webview';
 
-// Vectors
+// Icons
 import { 
-  Bot, Send, Sparkles, LogIn, LayoutDashboard, Globe, 
+  Bot, Send, LogIn, LayoutDashboard, Globe, 
   FileSpreadsheet, PlusCircle, User, Lock, TrendingUp, ShippingContainer, Clock, Layers
 } from 'lucide-react-native';
 
 import { MayaAgent } from './src/agents/Maya';
 
 const { width } = Dimensions.get('window');
+const Stack = createNativeStackNavigator();
+const Drawer = createDrawerNavigator();
 
 // ==========================================
-// 1. SAFE STABLE LOGIN SCREEN
+// 1. STABLE LOGIN SCREEN
 // ==========================================
-const LoginScreen = ({ onLoginSuccess }) => {
+const LoginScreen = ({ navigation }) => {
   const [username, setUsername] = useState('john@gmail.com');
   const [password, setPassword] = useState('abcd1234');
 
   const handleLogin = () => {
     if (!username.trim() || !password.trim()) {
-      Alert.alert("Error", "Please fill in all fields.");
+      Alert.alert("Authentication Failed", "Please enter valid credentials.");
       return;
     }
-
-    // Direct, synchronous state lift prevents unmounted memory leaks & crashes
-    onLoginSuccess();
+    // Safely navigate to MainApp via Stack Router without unmounting state errors
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'MainApp' }],
+    });
   };
 
   return (
@@ -67,7 +73,7 @@ const LoginScreen = ({ onLoginSuccess }) => {
           />
         </View>
 
-        <TouchableOpacity style={styles.loginSubmitButton} onPress={handleLogin}>
+        <TouchableOpacity style={styles.loginSubmitButton} onPress={handleLogin} activeOpacity={0.8}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <LogIn size={16} color="#09090b" style={{ marginRight: 8 }} />
             <Text style={styles.loginButtonText}>INITIALIZE INTERFACE</Text>
@@ -79,7 +85,7 @@ const LoginScreen = ({ onLoginSuccess }) => {
 };
 
 // ==========================================
-// 2. DASHBOARD SCREEN
+// 2. EXECUTIVE DASHBOARD SCREEN
 // ==========================================
 const DashboardScreen = () => {
   const [activeChartFilter, setActiveChartFilter] = useState('LEADS');
@@ -117,7 +123,7 @@ const DashboardScreen = () => {
         </TouchableOpacity>
       </View>
 
-      <Text style={styles.sectionSubHeading}>Analytical Performance ({activeChartFilter})</Text>
+      <Text style={styles.sectionSubHeading}>Analytical Performance Vector ({activeChartFilter})</Text>
       <View style={styles.graphContainerCanvas}>
         <View style={styles.graphBarsAxisContainer}>
           {analytics[activeChartFilter].map((item, index) => (
@@ -129,12 +135,21 @@ const DashboardScreen = () => {
           ))}
         </View>
       </View>
+
+      <Text style={styles.sectionSubHeading}>Financing Partner Ledger</Text>
+      <View style={styles.systemStatusLedgerAlertBox}>
+        <Layers size={18} color="#00E5FF" style={{ marginRight: 12 }} />
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Habib Bank Credit Line</Text>
+          <Text style={{ color: '#888', fontSize: 11, marginTop: 2 }}>Limit: $500,000 | Interest Rate: 8.5% | Active</Text>
+        </View>
+      </View>
     </ScrollView>
   );
 };
 
 // ==========================================
-// 3. WEBVIEW SCREEN
+// 3. WEBVIEW PORTAL
 // ==========================================
 const CRMWebViewScreen = () => (
   <View style={styles.container}>
@@ -143,24 +158,45 @@ const CRMWebViewScreen = () => (
 );
 
 // ==========================================
-// 4. MAYA AI SCREEN
+// 4. MAYA CONSOLE WITH TYPING EFFECT
 // ==========================================
 const MayaAgentConsoleScreen = () => {
   const [messages, setMessages] = useState([
-    { id: '1', text: "Greetings Executive. Maya operations core online.", isBot: true }
+    { id: '1', text: "Greetings Executive. Maya operations core online. How can I assist with your leads, cargo manifests, or reminders today?", isBot: true }
   ]);
   const [inputText, setInputText] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
   const maya = useRef(new MayaAgent()).current;
 
+  const simulateTypingResponse = (fullText) => {
+    let currentLength = 0;
+    const messageId = Date.now().toString();
+
+    setMessages(prev => [...prev, { id: messageId, text: '', isBot: true }]);
+
+    const interval = setInterval(() => {
+      currentLength += 3;
+      const nextChunk = fullText.slice(0, currentLength);
+
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, text: nextChunk } : m));
+
+      if (currentLength >= fullText.length) {
+        clearInterval(interval);
+        setIsTyping(false);
+      }
+    }, 20);
+  };
+
   const handleSend = async () => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || isTyping) return;
 
     const userMsg = inputText;
     setMessages(prev => [...prev, { id: Date.now().toString(), text: userMsg, isBot: false }]);
     setInputText('');
+    setIsTyping(true);
 
     const response = await maya.handleUserDirective(userMsg);
-    setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), text: response.advice, isBot: true }]);
+    simulateTypingResponse(response.advice);
   };
 
   return (
@@ -175,6 +211,12 @@ const MayaAgentConsoleScreen = () => {
           </View>
         )}
       />
+      {isTyping && (
+        <View style={{ paddingHorizontal: 20, paddingBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
+          <Bot size={14} color="#00E5FF" style={{ marginRight: 6 }} />
+          <Text style={{ color: '#00E5FF', fontSize: 11 }}>Maya is formulating advice...</Text>
+        </View>
+      )}
       <View style={styles.inputContainer}>
         <TextInput 
           style={styles.chatInput} 
@@ -183,7 +225,7 @@ const MayaAgentConsoleScreen = () => {
           value={inputText}
           onChangeText={setInputText}
         />
-        <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
+        <TouchableOpacity style={styles.sendButton} onPress={handleSend} disabled={isTyping}>
           <Send size={14} color="#09090b" />
         </TouchableOpacity>
       </View>
@@ -194,9 +236,7 @@ const MayaAgentConsoleScreen = () => {
 // ==========================================
 // 5. DRAWER NAVIGATOR
 // ==========================================
-const Drawer = createDrawerNavigator();
-
-function MainAppDrawer() {
+function DrawerNavigator() {
   return (
     <Drawer.Navigator
       screenOptions={{
@@ -204,7 +244,7 @@ function MainAppDrawer() {
         headerStyle: { backgroundColor: '#09090b', borderBottomWidth: 1, borderBottomColor: '#1a1a22' },
         headerTintColor: '#00E5FF',
         drawerStyle: { backgroundColor: '#09090b' },
-        drawerLabelStyle: { color: '#fff' },
+        drawerLabelStyle: { color: '#fff', fontWeight: '600' },
         drawerActiveTintColor: '#00E5FF',
         drawerActiveBackgroundColor: '#101014'
       }}
@@ -217,22 +257,24 @@ function MainAppDrawer() {
 }
 
 // ==========================================
-// 6. MAIN ROOT APP
+// 6. ROOT APP ENTRY WITH GESTURE WRAPPER
 // ==========================================
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-
   return (
-    <NavigationContainer>
-      {isLoggedIn ? (
-        <MainAppDrawer />
-      ) : (
-        <LoginScreen onLoginSuccess={() => setIsLoggedIn(true)} />
-      )}
-    </NavigationContainer>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <NavigationContainer>
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="MainApp" component={DrawerNavigator} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </GestureHandlerRootView>
   );
 }
 
+// ==========================================
+// STYLES
+// ==========================================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#09090b' },
   webview: { flex: 1, backgroundColor: '#09090b' },
@@ -252,6 +294,7 @@ const styles = StyleSheet.create({
   activeItemCard: { borderColor: '#00E5FF' },
   dashboardMetricNumber: { fontSize: 22, fontWeight: '800', color: '#fff', marginTop: 10 },
   dashboardMetricLabel: { color: '#666', fontSize: 11, marginTop: 4, fontWeight: '600' },
+  systemStatusLedgerAlertBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 16, borderRadius: 14, borderWidth: 1, borderColor: '#1a1a22', marginTop: 12 },
   graphContainerCanvas: { backgroundColor: '#101014', padding: 20, borderRadius: 20, borderWidth: 1, borderColor: '#1a1a22', height: 230, justifyContent: 'flex-end' },
   graphBarsAxisContainer: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'flex-end', width: '100%' },
   individualBarColumn: { alignItems: 'center' },
@@ -260,7 +303,7 @@ const styles = StyleSheet.create({
   barMarkerValueText: { color: '#fff', fontSize: 10, marginBottom: 6, fontWeight: '600' },
   msgBubble: { padding: 14, borderRadius: 18, marginVertical: 6, maxWidth: '85%' },
   botBubble: { backgroundColor: '#101014', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#1a1a22' },
-  userBubble: { backgroundColor: '#00E5FF', alignSelf: 'end' },
+  userBubble: { backgroundColor: '#00E5FF', alignSelf: 'flex-end' },
   msgText: { color: '#fff', fontSize: 13, lineHeight: 19 },
   inputContainer: { flexDirection: 'row', padding: 16, backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', alignItems: 'center' },
   chatInput: { flex: 1, backgroundColor: '#101014', color: '#fff', paddingHorizontal: 18, height: 48, borderRadius: 24, marginRight: 12, borderWidth: 1, borderColor: '#1a1a22' },
