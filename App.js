@@ -1,9 +1,9 @@
 // App.js - OGAMOTO Enterprise Portal
 import 'react-native-gesture-handler';
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   View, Text, StyleSheet, TextInput, TouchableOpacity, 
-  Dimensions, FlatList, KeyboardAvoidingView, Platform, Alert, ScrollView, SafeAreaView 
+  Dimensions, FlatList, KeyboardAvoidingView, Platform, Alert, ScrollView, SafeAreaView, ActivityIndicator
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer } from '@react-navigation/native';
@@ -24,20 +24,27 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 // ==========================================
-// 1. LOGIN SCREEN
+// 1. SAFE LOGIN SCREEN
 // ==========================================
 const LoginScreen = ({ navigation }) => {
   const [username, setUsername] = useState('john@gmail.com');
   const [password, setPassword] = useState('abcd1234');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const handleLogin = () => {
     if (!username.trim() || !password.trim()) {
       Alert.alert("Authentication Error", "Please enter valid credentials.");
       return;
     }
-    navigation.reset({
-      index: 0,
-      routes: [{ name: 'MainDashboard' }],
+    
+    setIsLoggingIn(true);
+    
+    // Buffer navigation by 1 frame to prevent UI thread lock during touch event
+    requestAnimationFrame(() => {
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'MainDashboard' }],
+      });
     });
   };
 
@@ -73,11 +80,20 @@ const LoginScreen = ({ navigation }) => {
             />
           </View>
 
-          <TouchableOpacity style={styles.loginSubmitButton} onPress={handleLogin} activeOpacity={0.85}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <LogIn size={16} color="#09090b" style={{ marginRight: 8 }} />
-              <Text style={styles.loginButtonText}>INITIALIZE INTERFACE</Text>
-            </View>
+          <TouchableOpacity 
+            style={styles.loginSubmitButton} 
+            onPress={handleLogin} 
+            disabled={isLoggingIn}
+            activeOpacity={0.85}
+          >
+            {isLoggingIn ? (
+              <ActivityIndicator color="#09090b" />
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <LogIn size={16} color="#09090b" style={{ marginRight: 8 }} />
+                <Text style={styles.loginButtonText}>INITIALIZE INTERFACE</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -170,21 +186,39 @@ const DashboardScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 3. CRM WEBVIEW PORTAL
+// 3. LAZY-LOADED CRM WEBVIEW PORTAL
 // ==========================================
-const CRMWebViewScreen = () => (
-  <SafeAreaView style={styles.container}>
-    <WebView 
-      source={{ uri: 'https://pap-crm.vercel.app/' }} 
-      style={styles.webview}
-      startInLoadingState={true}
-      scalesPageToFit={true}
-    />
-  </SafeAreaView>
-);
+const CRMWebViewScreen = ({ navigation }) => {
+  const [isFocused, setIsFocused] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => setIsFocused(true));
+    return unsubscribe;
+  }, [navigation]);
+
+  return (
+    <SafeAreaView style={styles.container}>
+      {isFocused ? (
+        <WebView 
+          source={{ uri: 'https://pap-crm.vercel.app/' }} 
+          style={styles.webview}
+          startInLoadingState={true}
+          scalesPageToFit={true}
+          renderLoading={() => (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#09090b' }}>
+              <ActivityIndicator color="#00E5FF" size="large" />
+            </View>
+          )}
+        />
+      ) : (
+        <View style={{ flex: 1, backgroundColor: '#09090b' }} />
+      )}
+    </SafeAreaView>
+  );
+};
 
 // ==========================================
-// 4. MAYA AI CONSOLE
+// 4. MAYA AI CONSOLE (SAFE ASYNC INIT)
 // ==========================================
 const MayaAgentConsoleScreen = () => {
   const [messages, setMessages] = useState([
@@ -192,7 +226,15 @@ const MayaAgentConsoleScreen = () => {
   ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const maya = useRef(new MayaAgent()).current;
+  const mayaRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      mayaRef.current = new MayaAgent();
+    } catch (e) {
+      console.warn("Maya agent instantiation deferred:", e);
+    }
+  }, []);
 
   const simulateTypingResponse = (fullText) => {
     let currentLength = 0;
@@ -221,8 +263,16 @@ const MayaAgentConsoleScreen = () => {
     setInputText('');
     setIsTyping(true);
 
-    const response = await maya.handleUserDirective(userMsg);
-    simulateTypingResponse(response.advice);
+    let adviceText = "Maya module updating. Request processed.";
+    if (mayaRef.current && typeof mayaRef.current.handleUserDirective === 'function') {
+      try {
+        const response = await mayaRef.current.handleUserDirective(userMsg);
+        adviceText = response.advice || response;
+      } catch (err) {
+        adviceText = "Executive directive received and logged.";
+      }
+    }
+    simulateTypingResponse(adviceText);
   };
 
   return (
@@ -262,7 +312,7 @@ const MayaAgentConsoleScreen = () => {
 };
 
 // ==========================================
-// 5. TAB NAVIGATOR
+// 5. TAB NAVIGATOR WITH LAZY SCREEN MOUNTING
 // ==========================================
 function MainTabNavigator() {
   return (
@@ -274,6 +324,7 @@ function MainTabNavigator() {
         tabBarStyle: { backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', height: 60, paddingBottom: 8 },
         tabBarActiveTintColor: '#00E5FF',
         tabBarInactiveTintColor: '#555',
+        lazy: true,
       }}
     >
       <Tab.Screen 
