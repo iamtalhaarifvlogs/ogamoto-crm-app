@@ -1,8 +1,8 @@
 // App.js - OGAMOTO Enterprise Portal
 import 'react-native-gesture-handler';
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  View, Text, StyleSheet, TextInput, TouchableOpacity, 
+import {
+  View, Text, StyleSheet, TextInput, TouchableOpacity,
   Dimensions, FlatList, KeyboardAvoidingView, Platform, Alert, ScrollView, SafeAreaView, ActivityIndicator
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -12,9 +12,15 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { WebView } from 'react-native-webview';
 
 // Vector Icons
-import { 
-  Bot, Send, LogIn, LayoutDashboard, Globe, 
-  User, Lock, TrendingUp, ShippingContainer, Layers, LogOut
+// NOTE: "ShippingContainer" is NOT a real export in lucide-react-native.
+// Importing a name that doesn't exist resolves to `undefined`, and React
+// throws "Element type is invalid" the moment that component tries to
+// render — which is exactly why the app crashed right after Login (that's
+// the first time DashboardScreen, and therefore this icon, actually mounts).
+// Fixed by using the real icon name: "Container".
+import {
+  Bot, Send, LogIn, LayoutDashboard, Globe,
+  User, Lock, TrendingUp, Container, Layers, LogOut, Eye, EyeOff
 } from 'lucide-react-native';
 
 import { MayaAgent } from './src/agents/Maya';
@@ -24,21 +30,22 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 // ==========================================
-// 1. SAFE LOGIN SCREEN
+// 1. LOGIN SCREEN
 // ==========================================
 const LoginScreen = ({ navigation }) => {
   const [username, setUsername] = useState('john@gmail.com');
   const [password, setPassword] = useState('abcd1234');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleLogin = () => {
     if (!username.trim() || !password.trim()) {
-      Alert.alert("Authentication Error", "Please enter valid credentials.");
+      Alert.alert('Authentication Error', 'Please enter valid credentials.');
       return;
     }
-    
+
     setIsLoggingIn(true);
-    
+
     // Buffer navigation by 1 frame to prevent UI thread lock during touch event
     requestAnimationFrame(() => {
       navigation.reset({
@@ -51,16 +58,20 @@ const LoginScreen = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.loginContainer}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' }}>
+        <View style={styles.loginGlow} />
         <View style={styles.loginCard}>
+          <View style={styles.brandBadge}>
+            <Bot size={26} color="#00E5FF" />
+          </View>
           <Text style={styles.loginBrandText}>OGAMOTO</Text>
           <Text style={styles.loginTagline}>ENTERPRISE SYSTEM PORTAL</Text>
 
           <View style={styles.inputWrapper}>
             <User size={16} color="#00E5FF" style={styles.inputIcon} />
-            <TextInput 
-              style={styles.authInputField} 
-              placeholder="Admin Identifier" 
-              placeholderTextColor="#444"
+            <TextInput
+              style={styles.authInputField}
+              placeholder="Admin Identifier"
+              placeholderTextColor="#4a4a55"
               value={username}
               onChangeText={setUsername}
               autoCapitalize="none"
@@ -69,20 +80,23 @@ const LoginScreen = ({ navigation }) => {
 
           <View style={styles.inputWrapper}>
             <Lock size={16} color="#00E5FF" style={styles.inputIcon} />
-            <TextInput 
-              style={styles.authInputField} 
-              placeholder="Access Key" 
-              placeholderTextColor="#444"
-              secureTextEntry
+            <TextInput
+              style={styles.authInputField}
+              placeholder="Access Key"
+              placeholderTextColor="#4a4a55"
+              secureTextEntry={!showPassword}
               value={password}
               onChangeText={setPassword}
               autoCapitalize="none"
             />
+            <TouchableOpacity onPress={() => setShowPassword(v => !v)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              {showPassword ? <EyeOff size={16} color="#555" /> : <Eye size={16} color="#555" />}
+            </TouchableOpacity>
           </View>
 
-          <TouchableOpacity 
-            style={styles.loginSubmitButton} 
-            onPress={handleLogin} 
+          <TouchableOpacity
+            style={[styles.loginSubmitButton, isLoggingIn && styles.loginSubmitButtonDisabled]}
+            onPress={handleLogin}
             disabled={isLoggingIn}
             activeOpacity={0.85}
           >
@@ -95,6 +109,8 @@ const LoginScreen = ({ navigation }) => {
               </View>
             )}
           </TouchableOpacity>
+
+          <Text style={styles.loginFooterNote}>Secured session · v2.4 build</Text>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -106,7 +122,7 @@ const LoginScreen = ({ navigation }) => {
 // ==========================================
 const DashboardScreen = ({ navigation }) => {
   const [activeChartFilter, setActiveChartFilter] = useState('LEADS');
-  
+
   const analytics = {
     LEADS: [
       { label: 'Q1 Target', value: '$450K', height: 80 },
@@ -131,29 +147,38 @@ const DashboardScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={{ padding: 20 }}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <Text style={styles.sectionHeading}>Executive Command</Text>
-          <TouchableOpacity style={styles.logoutIconButton} onPress={handleLogout}>
-            <LogOut size={16} color="#ff4444" />
+      <ScrollView contentContainerStyle={{ padding: 20 }} showsVerticalScrollIndicator={false}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <View>
+            <Text style={styles.sectionHeading}>Executive Command</Text>
+            <Text style={styles.sectionEyebrow}>Live overview</Text>
+          </View>
+          <TouchableOpacity style={styles.logoutIconButton} onPress={handleLogout} activeOpacity={0.8}>
+            <LogOut size={16} color="#ff4d4d" />
           </TouchableOpacity>
         </View>
 
         <View style={styles.statsRow}>
-          <TouchableOpacity 
-            style={[styles.dashboardMetricItem, activeChartFilter === 'LEADS' && styles.activeItemCard]} 
+          <TouchableOpacity
+            style={[styles.dashboardMetricItem, activeChartFilter === 'LEADS' && styles.activeItemCard]}
             onPress={() => setActiveChartFilter('LEADS')}
+            activeOpacity={0.85}
           >
-            <TrendingUp size={18} color={activeChartFilter === 'LEADS' ? '#00E5FF' : '#555'} />
+            <View style={[styles.metricIconWrap, activeChartFilter === 'LEADS' && styles.metricIconWrapActive]}>
+              <TrendingUp size={18} color={activeChartFilter === 'LEADS' ? '#00E5FF' : '#666'} />
+            </View>
             <Text style={styles.dashboardMetricNumber}>$1.25M</Text>
             <Text style={styles.dashboardMetricLabel}>Active Lead Valuation</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity 
-            style={[styles.dashboardMetricItem, activeChartFilter === 'SHIPMENTS' && styles.activeItemCard]} 
+          <TouchableOpacity
+            style={[styles.dashboardMetricItem, activeChartFilter === 'SHIPMENTS' && styles.activeItemCard]}
             onPress={() => setActiveChartFilter('SHIPMENTS')}
+            activeOpacity={0.85}
           >
-            <ShippingContainer size={18} color={activeChartFilter === 'SHIPMENTS' ? '#00E5FF' : '#555'} />
+            <View style={[styles.metricIconWrap, activeChartFilter === 'SHIPMENTS' && styles.metricIconWrapActive]}>
+              <Container size={18} color={activeChartFilter === 'SHIPMENTS' ? '#00E5FF' : '#666'} />
+            </View>
             <Text style={styles.dashboardMetricNumber}>765</Text>
             <Text style={styles.dashboardMetricLabel}>Sea Cargo Manifests</Text>
           </TouchableOpacity>
@@ -174,11 +199,14 @@ const DashboardScreen = ({ navigation }) => {
 
         <Text style={styles.sectionSubHeading}>Financing Partner Ledger</Text>
         <View style={styles.systemStatusLedgerAlertBox}>
-          <Layers size={18} color="#00E5FF" style={{ marginRight: 12 }} />
+          <View style={styles.ledgerIconWrap}>
+            <Layers size={18} color="#00E5FF" />
+          </View>
           <View style={{ flex: 1 }}>
             <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Habib Bank Credit Line</Text>
-            <Text style={{ color: '#888', fontSize: 11, marginTop: 2 }}>Limit: $500,000 | Interest Rate: 8.5% | Active</Text>
+            <Text style={{ color: '#8a8a94', fontSize: 11, marginTop: 3 }}>Limit: $500,000 · Interest Rate: 8.5% · Active</Text>
           </View>
+          <View style={styles.activeDot} />
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -199,8 +227,8 @@ const CRMWebViewScreen = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       {isFocused ? (
-        <WebView 
-          source={{ uri: 'https://pap-crm.vercel.app/' }} 
+        <WebView
+          source={{ uri: 'https://pap-crm.vercel.app/' }}
           style={styles.webview}
           startInLoadingState={true}
           scalesPageToFit={true}
@@ -222,7 +250,7 @@ const CRMWebViewScreen = ({ navigation }) => {
 // ==========================================
 const MayaAgentConsoleScreen = () => {
   const [messages, setMessages] = useState([
-    { id: '1', text: "Greetings Executive. Maya operations core online. How can I assist with your leads, cargo manifests, or reminders today?", isBot: true }
+    { id: '1', text: 'Greetings Executive. Maya operations core online. How can I assist with your leads, cargo manifests, or reminders today?', isBot: true }
   ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -232,7 +260,7 @@ const MayaAgentConsoleScreen = () => {
     try {
       mayaRef.current = new MayaAgent();
     } catch (e) {
-      console.warn("Maya agent instantiation deferred:", e);
+      console.warn('Maya agent instantiation deferred:', e);
     }
   }, []);
 
@@ -263,13 +291,13 @@ const MayaAgentConsoleScreen = () => {
     setInputText('');
     setIsTyping(true);
 
-    let adviceText = "Maya module updating. Request processed.";
+    let adviceText = 'Maya module updating. Request processed.';
     if (mayaRef.current && typeof mayaRef.current.handleUserDirective === 'function') {
       try {
         const response = await mayaRef.current.handleUserDirective(userMsg);
         adviceText = response.advice || response;
       } catch (err) {
-        adviceText = "Executive directive received and logged.";
+        adviceText = 'Executive directive received and logged.';
       }
     }
     simulateTypingResponse(adviceText);
@@ -284,7 +312,12 @@ const MayaAgentConsoleScreen = () => {
           contentContainerStyle={{ padding: 20 }}
           renderItem={({ item }) => (
             <View style={[styles.msgBubble, item.isBot ? styles.botBubble : styles.userBubble]}>
-              <Text style={styles.msgText}>{item.text}</Text>
+              {item.isBot && (
+                <View style={styles.botAvatar}>
+                  <Bot size={12} color="#00E5FF" />
+                </View>
+              )}
+              <Text style={[styles.msgText, !item.isBot && styles.userMsgText]}>{item.text}</Text>
             </View>
           )}
         />
@@ -295,14 +328,14 @@ const MayaAgentConsoleScreen = () => {
           </View>
         )}
         <View style={styles.inputContainer}>
-          <TextInput 
-            style={styles.chatInput} 
-            placeholder="Command Maya..." 
-            placeholderTextColor="#444" 
+          <TextInput
+            style={styles.chatInput}
+            placeholder="Command Maya..."
+            placeholderTextColor="#4a4a55"
             value={inputText}
             onChangeText={setInputText}
           />
-          <TouchableOpacity style={styles.sendButton} onPress={handleSend} disabled={isTyping}>
+          <TouchableOpacity style={[styles.sendButton, isTyping && styles.sendButtonDisabled]} onPress={handleSend} disabled={isTyping} activeOpacity={0.85}>
             <Send size={14} color="#09090b" />
           </TouchableOpacity>
         </View>
@@ -321,26 +354,28 @@ function MainTabNavigator() {
         headerShown: true,
         headerStyle: { backgroundColor: '#09090b', borderBottomWidth: 1, borderBottomColor: '#1a1a22' },
         headerTintColor: '#00E5FF',
-        tabBarStyle: { backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', height: 60, paddingBottom: 8 },
+        headerTitleStyle: { fontWeight: '700', letterSpacing: 0.5 },
+        tabBarStyle: { backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', height: 62, paddingBottom: 8, paddingTop: 6 },
         tabBarActiveTintColor: '#00E5FF',
         tabBarInactiveTintColor: '#555',
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
         lazy: true,
       }}
     >
-      <Tab.Screen 
-        name="Dashboard" 
-        component={DashboardScreen} 
-        options={{ tabBarIcon: ({ color }) => <LayoutDashboard size={20} color={color} /> }} 
+      <Tab.Screen
+        name="Dashboard"
+        component={DashboardScreen}
+        options={{ tabBarIcon: ({ color }) => <LayoutDashboard size={20} color={color} /> }}
       />
-      <Tab.Screen 
-        name="Maya AI" 
-        component={MayaAgentConsoleScreen} 
-        options={{ tabBarIcon: ({ color }) => <Bot size={20} color={color} /> }} 
+      <Tab.Screen
+        name="Maya AI"
+        component={MayaAgentConsoleScreen}
+        options={{ tabBarIcon: ({ color }) => <Bot size={20} color={color} /> }}
       />
-      <Tab.Screen 
-        name="CRM Portal" 
-        component={CRMWebViewScreen} 
-        options={{ tabBarIcon: ({ color }) => <Globe size={20} color={color} /> }} 
+      <Tab.Screen
+        name="CRM Portal"
+        component={CRMWebViewScreen}
+        options={{ tabBarIcon: ({ color }) => <Globe size={20} color={color} /> }}
       />
     </Tab.Navigator>
   );
@@ -368,35 +403,85 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#09090b' },
   webview: { flex: 1, backgroundColor: '#09090b' },
+
   loginContainer: { flex: 1, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
-  loginCard: { width: width * 0.85, padding: 28, backgroundColor: '#101014', borderRadius: 24, borderWidth: 1, borderColor: '#1a1a22' },
-  loginBrandText: { fontSize: 32, fontWeight: '900', color: '#00E5FF', textAlign: 'center', letterSpacing: 6 },
-  loginTagline: { fontSize: 10, color: '#fff', opacity: 0.4, textAlign: 'center', letterSpacing: 2, marginBottom: 35, marginTop: 4 },
+  loginGlow: {
+    position: 'absolute',
+    width: width * 1.4,
+    height: width * 1.4,
+    borderRadius: width * 0.7,
+    backgroundColor: '#00E5FF',
+    opacity: 0.06,
+    top: -width * 0.6,
+  },
+  loginCard: {
+    width: width * 0.85,
+    padding: 28,
+    backgroundColor: '#101014',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#1a1a22',
+    shadowColor: '#00E5FF',
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+  },
+  brandBadge: {
+    alignSelf: 'center',
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: '#09090b',
+    borderWidth: 1,
+    borderColor: '#1a1a22',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  loginBrandText: { fontSize: 30, fontWeight: '900', color: '#00E5FF', textAlign: 'center', letterSpacing: 6 },
+  loginTagline: { fontSize: 10, color: '#fff', opacity: 0.4, textAlign: 'center', letterSpacing: 2, marginBottom: 32, marginTop: 6 },
   inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 14, marginBottom: 16, paddingHorizontal: 16 },
   inputIcon: { marginRight: 12 },
   authInputField: { flex: 1, height: 50, color: '#fff', fontSize: 14 },
-  loginSubmitButton: { backgroundColor: '#00E5FF', height: 52, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
+  loginSubmitButton: { backgroundColor: '#00E5FF', height: 52, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 10, shadowColor: '#00E5FF', shadowOpacity: 0.35, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
+  loginSubmitButtonDisabled: { opacity: 0.7 },
   loginButtonText: { color: '#09090b', fontWeight: '800', fontSize: 13, letterSpacing: 1 },
-  logoutIconButton: { padding: 8, backgroundColor: '#1a1014', borderRadius: 8, borderWidth: 1, borderColor: '#331111' },
+  loginFooterNote: { color: '#3a3a44', fontSize: 10, textAlign: 'center', marginTop: 20, letterSpacing: 0.5 },
+
+  logoutIconButton: { padding: 9, backgroundColor: '#1a1014', borderRadius: 10, borderWidth: 1, borderColor: '#331111' },
   sectionHeading: { fontSize: 22, fontWeight: '800', color: '#fff' },
+  sectionEyebrow: { fontSize: 11, color: '#666', marginTop: 2, fontWeight: '600' },
   sectionSubHeading: { fontSize: 12, fontWeight: '700', color: '#00E5FF', marginTop: 24, marginBottom: 16, letterSpacing: 1 },
+
   statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
   dashboardMetricItem: { backgroundColor: '#101014', width: '48%', padding: 18, borderRadius: 18, borderWidth: 1, borderColor: '#1a1a22' },
-  activeItemCard: { borderColor: '#00E5FF' },
-  dashboardMetricNumber: { fontSize: 22, fontWeight: '800', color: '#fff', marginTop: 10 },
-  dashboardMetricLabel: { color: '#666', fontSize: 11, marginTop: 4, fontWeight: '600' },
+  activeItemCard: { borderColor: '#00E5FF', shadowColor: '#00E5FF', shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  metricIconWrap: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
+  metricIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.1)' },
+  dashboardMetricNumber: { fontSize: 22, fontWeight: '800', color: '#fff', marginTop: 12 },
+  dashboardMetricLabel: { color: '#777', fontSize: 11, marginTop: 4, fontWeight: '600' },
+
   systemStatusLedgerAlertBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 16, borderRadius: 14, borderWidth: 1, borderColor: '#1a1a22', marginTop: 12 },
+  ledgerIconWrap: { width: 38, height: 38, borderRadius: 10, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  activeDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#00E5A0' },
+
   graphContainerCanvas: { backgroundColor: '#101014', padding: 20, borderRadius: 20, borderWidth: 1, borderColor: '#1a1a22', height: 230, justifyContent: 'flex-end' },
   graphBarsAxisContainer: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'flex-end', width: '100%' },
   individualBarColumn: { alignItems: 'center' },
   interactiveChartBarLine: { width: 34, backgroundColor: '#00E5FF', borderRadius: 6 },
-  barMarkerLabels: { color: '#555', fontSize: 10, marginTop: 10, fontWeight: '700' },
+  barMarkerLabels: { color: '#666', fontSize: 10, marginTop: 10, fontWeight: '700' },
   barMarkerValueText: { color: '#fff', fontSize: 10, marginBottom: 6, fontWeight: '600' },
-  msgBubble: { padding: 14, borderRadius: 18, marginVertical: 6, maxWidth: '85%' },
+
+  msgBubble: { padding: 14, borderRadius: 18, marginVertical: 6, maxWidth: '85%', flexDirection: 'row', alignItems: 'flex-start' },
   botBubble: { backgroundColor: '#101014', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#1a1a22' },
   userBubble: { backgroundColor: '#00E5FF', alignSelf: 'flex-end' },
-  msgText: { color: '#fff', fontSize: 13, lineHeight: 19 },
+  botAvatar: { width: 20, height: 20, borderRadius: 6, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center', marginRight: 8, marginTop: 1 },
+  msgText: { color: '#eaeaea', fontSize: 13, lineHeight: 19, flexShrink: 1 },
+  userMsgText: { color: '#09090b', fontWeight: '600' },
+
   inputContainer: { flexDirection: 'row', padding: 16, backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', alignItems: 'center' },
   chatInput: { flex: 1, backgroundColor: '#101014', color: '#fff', paddingHorizontal: 18, height: 48, borderRadius: 24, marginRight: 12, borderWidth: 1, borderColor: '#1a1a22' },
-  sendButton: { backgroundColor: '#00E5FF', width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' }
+  sendButton: { backgroundColor: '#00E5FF', width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', shadowColor: '#00E5FF', shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  sendButtonDisabled: { opacity: 0.5 },
 });
