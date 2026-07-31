@@ -1,4 +1,3 @@
-// App.js - OGAMOTO Enterprise Portal
 import 'react-native-gesture-handler';
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -8,26 +7,133 @@ import {
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList, DrawerItem } from '@react-navigation/drawer';
 import { WebView } from 'react-native-webview';
 
+// Expo Modules for Notifications & PDF Generation
+import * as Notifications from 'expo-notifications';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+
 // Vector Icons
-// NOTE: "ShippingContainer" is NOT a real export in lucide-react-native.
-// Importing a name that doesn't exist resolves to `undefined`, and React
-// throws "Element type is invalid" the moment that component tries to
-// render — which is exactly why the app crashed right after Login (that's
-// the first time DashboardScreen, and therefore this icon, actually mounts).
-// Fixed by using the real icon name: "Container".
 import {
   Bot, Send, LogIn, LayoutDashboard, Globe,
-  User, Lock, TrendingUp, Container, Layers, LogOut, Eye, EyeOff
+  User, Lock, TrendingUp, Container, Layers, LogOut, Eye, EyeOff,
+  Menu, FileText, Download, Anchor, Truck, Sliders, Settings, Plus, RefreshCw, Bell
 } from 'lucide-react-native';
 
-import { MayaAgent } from './src/agents/Maya';
+// Notification Handler Setup
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 const { width } = Dimensions.get('window');
 const Stack = createNativeStackNavigator();
-const Tab = createBottomTabNavigator();
+const Drawer = createDrawerNavigator();
+
+// ==========================================
+// CENTRALIZED REAL-TIME DATA STORE
+// ==========================================
+export const GlobalDataStore = {
+  leads: [
+    { id: '1', name: 'Jayson Tatum', vehicle: 'Honda Civic', deposit: 22000, date: '2026-07-28', status: 'Active' },
+    { id: '2', name: 'Samba Motors', vehicle: 'Toyota HiAce', deposit: 15000, date: '2026-07-29', status: 'Pipeline' },
+    { id: '3', name: 'Karachi Logistics', vehicle: 'Isuzu Truck', deposit: 45000, date: '2026-07-30', status: 'Closed' },
+  ],
+  shipments: [
+    { id: 'S1', container: 'CN-9082', vessel: 'Evergreen Alpha', origin: 'Port Qasim', units: 120, status: 'In Transit' },
+    { id: 'S2', container: 'CN-4410', vessel: 'Maersk Sealand', origin: 'KPT Terminal', units: 310, status: 'Customs' },
+  ],
+  reports: [
+    { id: 'REP-001', title: 'Q2 Executive Lead Audit', date: '2026-07-15', size: '1.2 MB' },
+    { id: 'REP-002', title: 'Cargo & Logistics Manifest', date: '2026-07-28', size: '850 KB' },
+  ],
+  addLead(leadData) {
+    const newLead = {
+      id: Date.now().toString(),
+      name: leadData.name || 'Unassigned Lead',
+      vehicle: leadData.vehicle || 'Standard Unit',
+      deposit: Number(leadData.deposit) || 0,
+      date: new Date().toISOString().split('T')[0],
+      status: 'Active'
+    };
+    this.leads.unshift(newLead);
+    return newLead;
+  }
+};
+
+// ==========================================
+// MAYA & AETHER AI ENGINE (WITH PUSH NOTIFICATIONS)
+// ==========================================
+class OperationalMayaEngine {
+  async requestNotificationPermission() {
+    const { status } = await Notifications.requestPermissionsAsync();
+    return status === 'granted';
+  }
+
+  async scheduleNotification(seconds, title, body) {
+    const hasPermission = await this.requestNotificationPermission();
+    if (!hasPermission) {
+      return 'Notification permission missing. Please enable alerts in app settings.';
+    }
+    await Notifications.scheduleNotificationAsync({
+      content: { title: title || 'OGAMOTO Alert', body: body || 'Scheduled Maya action.' },
+      trigger: { seconds: seconds },
+    });
+    return `Notification set! Triggering in ${seconds} seconds.`;
+  }
+
+  async parseAndExecute(input) {
+    const lower = input.toLowerCase();
+
+    // 1. Handle Reminders / Notifications
+    if (lower.includes('notify') || lower.includes('remind')) {
+      let delaySeconds = 60;
+      const minuteMatch = lower.match(/in\s+(\d+)\s+min/);
+      if (minuteMatch) {
+        delaySeconds = parseInt(minuteMatch[1]) * 60;
+      }
+      return await this.scheduleNotification(delaySeconds, 'Maya Reminder', `Action prompt: "${input}"`);
+    }
+
+    // 2. Handle Lead Display Queries
+    if (lower.includes('show lead') || lower.includes('list lead') || lower.includes('get lead')) {
+      const leadsList = GlobalDataStore.leads.map(l => `• ${l.name} - ${l.vehicle} ($${l.deposit.toLocaleString()})`).join('\n');
+      return `**Current Pipeline Leads:**\n\n${leadsList}`;
+    }
+
+    // 3. Handle Add Lead Directives (CUD)
+    if (lower.includes('add') && lower.includes('lead')) {
+      // Natural language parsing for attributes
+      const depositMatch = input.match(/\$(\d+)/) || input.match(/of\s+(\d+)/);
+      const depositVal = depositMatch ? depositMatch[1] : 0;
+      
+      let nameVal = 'New Lead';
+      if (lower.includes('add ')) {
+        const afterAdd = input.split(/add/i)[1];
+        const asMatch = afterAdd.split(/as a|for/i)[0];
+        if (asMatch && asMatch.trim()) nameVal = asMatch.trim();
+      }
+
+      let vehicleVal = 'Vehicle Unit';
+      if (lower.includes('for ')) {
+        const afterFor = input.split(/for/i)[1];
+        const withMatch = afterFor.split(/with|\$/i)[0];
+        if (withMatch && withMatch.trim()) vehicleVal = withMatch.trim();
+      }
+
+      const created = GlobalDataStore.addLead({ name: nameVal, vehicle: vehicleVal, deposit: depositVal });
+
+      return `**Aether Execution Update:**\nStatus: SUCCESS\nEntity: LEADS\nAction: CREATE\n\nRecorded Lead: ${created.name}\nVehicle: ${created.vehicle}\nDeposit: $${created.deposit.toLocaleString()}`;
+    }
+
+    return "Executive directive logged. Aether state synchronized.";
+  }
+}
 
 // ==========================================
 // 1. LOGIN SCREEN
@@ -43,15 +149,9 @@ const LoginScreen = ({ navigation }) => {
       Alert.alert('Authentication Error', 'Please enter valid credentials.');
       return;
     }
-
     setIsLoggingIn(true);
-
-    // Buffer navigation by 1 frame to prevent UI thread lock during touch event
     requestAnimationFrame(() => {
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'MainDashboard' }],
-      });
+      navigation.reset({ index: 0, routes: [{ name: 'MainDrawer' }] });
     });
   };
 
@@ -60,57 +160,31 @@ const LoginScreen = ({ navigation }) => {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' }}>
         <View style={styles.loginGlow} />
         <View style={styles.loginCard}>
-          <View style={styles.brandBadge}>
-            <Bot size={26} color="#00E5FF" />
-          </View>
+          <View style={styles.brandBadge}><Bot size={26} color="#00E5FF" /></View>
           <Text style={styles.loginBrandText}>OGAMOTO</Text>
           <Text style={styles.loginTagline}>ENTERPRISE SYSTEM PORTAL</Text>
 
           <View style={styles.inputWrapper}>
             <User size={16} color="#00E5FF" style={styles.inputIcon} />
-            <TextInput
-              style={styles.authInputField}
-              placeholder="Admin Identifier"
-              placeholderTextColor="#4a4a55"
-              value={username}
-              onChangeText={setUsername}
-              autoCapitalize="none"
-            />
+            <TextInput style={styles.authInputField} placeholder="Admin Identifier" placeholderTextColor="#4a4a55" value={username} onChangeText={setUsername} autoCapitalize="none" />
           </View>
 
           <View style={styles.inputWrapper}>
             <Lock size={16} color="#00E5FF" style={styles.inputIcon} />
-            <TextInput
-              style={styles.authInputField}
-              placeholder="Access Key"
-              placeholderTextColor="#4a4a55"
-              secureTextEntry={!showPassword}
-              value={password}
-              onChangeText={setPassword}
-              autoCapitalize="none"
-            />
-            <TouchableOpacity onPress={() => setShowPassword(v => !v)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <TextInput style={styles.authInputField} placeholder="Access Key" placeholderTextColor="#4a4a55" secureTextEntry={!showPassword} value={password} onChangeText={setPassword} autoCapitalize="none" />
+            <TouchableOpacity onPress={() => setShowPassword(v => !v)}>
               {showPassword ? <EyeOff size={16} color="#555" /> : <Eye size={16} color="#555" />}
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity
-            style={[styles.loginSubmitButton, isLoggingIn && styles.loginSubmitButtonDisabled]}
-            onPress={handleLogin}
-            disabled={isLoggingIn}
-            activeOpacity={0.85}
-          >
-            {isLoggingIn ? (
-              <ActivityIndicator color="#09090b" />
-            ) : (
+          <TouchableOpacity style={[styles.loginSubmitButton, isLoggingIn && styles.loginSubmitButtonDisabled]} onPress={handleLogin} disabled={isLoggingIn} activeOpacity={0.85}>
+            {isLoggingIn ? <ActivityIndicator color="#09090b" /> : (
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <LogIn size={16} color="#09090b" style={{ marginRight: 8 }} />
                 <Text style={styles.loginButtonText}>INITIALIZE INTERFACE</Text>
               </View>
             )}
           </TouchableOpacity>
-
-          <Text style={styles.loginFooterNote}>Secured session · v2.4 build</Text>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -118,93 +192,89 @@ const LoginScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 2. DASHBOARD SCREEN
+// 2. DASHBOARD SCREEN WITH LIVE METRICS & FILTERS
 // ==========================================
 const DashboardScreen = ({ navigation }) => {
-  const [activeChartFilter, setActiveChartFilter] = useState('LEADS');
+  const [activeDomain, setActiveDomain] = useState('LEADS');
+  const [timeFilter, setTimeFilter] = useState('30D');
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const analytics = {
-    LEADS: [
-      { label: 'Q1 Target', value: '$450K', height: 80 },
-      { label: 'Q2 Pipeline', value: '$820K', height: 130 },
-      { label: 'Q3 Forecast', value: '$1.2M', height: 170 },
-      { label: 'Q4 Closed', value: '$610K', height: 100 }
-    ],
-    SHIPMENTS: [
-      { label: 'Container', value: '120 Units', height: 60 },
-      { label: 'Bulk Vessel', value: '310 Units', height: 150 },
-      { label: 'Air Freight', value: '95 Units', height: 50 },
-      { label: 'Customs', value: '240 Units', height: 110 }
-    ]
-  };
-
-  const handleLogout = () => {
-    navigation.reset({
-      index: 0,
-      routes: [{ name: 'Login' }],
-    });
-  };
+  // Compute Live Valuation from store
+  const totalLeadValuation = GlobalDataStore.leads.reduce((sum, item) => sum + item.deposit, 0);
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={{ padding: 20 }} showsVerticalScrollIndicator={false}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-          <View>
-            <Text style={styles.sectionHeading}>Executive Command</Text>
-            <Text style={styles.sectionEyebrow}>Live overview</Text>
+        {/* Header */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 16 }}>
+              <Menu size={24} color="#00E5FF" />
+            </TouchableOpacity>
+            <View>
+              <Text style={styles.sectionHeading}>Executive Command</Text>
+              <Text style={styles.sectionEyebrow}>Live operational metrics</Text>
+            </View>
           </View>
-          <TouchableOpacity style={styles.logoutIconButton} onPress={handleLogout} activeOpacity={0.8}>
-            <LogOut size={16} color="#ff4d4d" />
+          <TouchableOpacity onPress={() => setRefreshKey(prev => prev + 1)} style={styles.refreshBtn}>
+            <RefreshCw size={16} color="#00E5FF" />
           </TouchableOpacity>
         </View>
 
+        {/* Dynamic Metric Cards */}
         <View style={styles.statsRow}>
-          <TouchableOpacity
-            style={[styles.dashboardMetricItem, activeChartFilter === 'LEADS' && styles.activeItemCard]}
-            onPress={() => setActiveChartFilter('LEADS')}
-            activeOpacity={0.85}
-          >
-            <View style={[styles.metricIconWrap, activeChartFilter === 'LEADS' && styles.metricIconWrapActive]}>
-              <TrendingUp size={18} color={activeChartFilter === 'LEADS' ? '#00E5FF' : '#666'} />
+          <TouchableOpacity style={[styles.dashboardMetricItem, activeDomain === 'LEADS' && styles.activeItemCard]} onPress={() => setActiveDomain('LEADS')}>
+            <View style={[styles.metricIconWrap, activeDomain === 'LEADS' && styles.metricIconWrapActive]}>
+              <TrendingUp size={18} color={activeDomain === 'LEADS' ? '#00E5FF' : '#666'} />
             </View>
-            <Text style={styles.dashboardMetricNumber}>$1.25M</Text>
-            <Text style={styles.dashboardMetricLabel}>Active Lead Valuation</Text>
+            <Text style={styles.dashboardMetricNumber}>${totalLeadValuation.toLocaleString()}</Text>
+            <Text style={styles.dashboardMetricLabel}>Live Leads Value</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.dashboardMetricItem, activeChartFilter === 'SHIPMENTS' && styles.activeItemCard]}
-            onPress={() => setActiveChartFilter('SHIPMENTS')}
-            activeOpacity={0.85}
-          >
-            <View style={[styles.metricIconWrap, activeChartFilter === 'SHIPMENTS' && styles.metricIconWrapActive]}>
-              <Container size={18} color={activeChartFilter === 'SHIPMENTS' ? '#00E5FF' : '#666'} />
+          <TouchableOpacity style={[styles.dashboardMetricItem, activeDomain === 'SHIPMENTS' && styles.activeItemCard]} onPress={() => setActiveDomain('SHIPMENTS')}>
+            <View style={[styles.metricIconWrap, activeDomain === 'SHIPMENTS' && styles.metricIconWrapActive]}>
+              <Container size={18} color={activeDomain === 'SHIPMENTS' ? '#00E5FF' : '#666'} />
             </View>
-            <Text style={styles.dashboardMetricNumber}>765</Text>
-            <Text style={styles.dashboardMetricLabel}>Sea Cargo Manifests</Text>
+            <Text style={styles.dashboardMetricNumber}>{GlobalDataStore.shipments.length}</Text>
+            <Text style={styles.dashboardMetricLabel}>Active Cargo Manifests</Text>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.sectionSubHeading}>Analytical Vector ({activeChartFilter})</Text>
-        <View style={styles.graphContainerCanvas}>
-          <View style={styles.graphBarsAxisContainer}>
-            {analytics[activeChartFilter].map((item, index) => (
-              <View key={index} style={styles.individualBarColumn}>
-                <Text style={styles.barMarkerValueText}>{item.value}</Text>
-                <View style={[styles.interactiveChartBarLine, { height: item.height }]} />
-                <Text style={styles.barMarkerLabels}>{item.label}</Text>
-              </View>
+        {/* Time-Range Filter Bar */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 24, marginBottom: 12 }}>
+          <Text style={styles.sectionSubHeading}>Analytical Vector ({activeDomain})</Text>
+          <View style={styles.timeFilterContainer}>
+            {['7D', '30D', 'YTD'].map((range) => (
+              <TouchableOpacity key={range} onPress={() => setTimeFilter(range)} style={[styles.timeFilterBadge, timeFilter === range && styles.timeFilterBadgeActive]}>
+                <Text style={[styles.timeFilterText, timeFilter === range && styles.timeFilterTextActive]}>{range}</Text>
+              </TouchableOpacity>
             ))}
           </View>
         </View>
 
+        {/* Interactive Dynamic Chart */}
+        <View style={styles.graphContainerCanvas}>
+          <View style={styles.graphBarsAxisContainer}>
+            {GlobalDataStore.leads.map((item, index) => {
+              const barHeight = Math.min(Math.max((item.deposit / 50000) * 150, 40), 160);
+              return (
+                <View key={index} style={styles.individualBarColumn}>
+                  <Text style={styles.barMarkerValueText}>${(item.deposit / 1000).toFixed(0)}k</Text>
+                  <View style={[styles.interactiveChartBarLine, { height: barHeight }]} />
+                  <Text style={styles.barMarkerLabels}>{item.name.split(' ')[0]}</Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Partner Ledger */}
         <Text style={styles.sectionSubHeading}>Financing Partner Ledger</Text>
         <View style={styles.systemStatusLedgerAlertBox}>
-          <View style={styles.ledgerIconWrap}>
-            <Layers size={18} color="#00E5FF" />
-          </View>
+          <View style={styles.ledgerIconWrap}><Layers size={18} color="#00E5FF" /></View>
           <View style={{ flex: 1 }}>
             <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Habib Bank Credit Line</Text>
-            <Text style={{ color: '#8a8a94', fontSize: 11, marginTop: 3 }}>Limit: $500,000 · Interest Rate: 8.5% · Active</Text>
+            <Text style={{ color: '#8a8a94', fontSize: 11, marginTop: 3 }}>Limit: $500,000 · Active</Text>
           </View>
           <View style={styles.activeDot} />
         </View>
@@ -214,97 +284,40 @@ const DashboardScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 3. LAZY-LOADED CRM WEBVIEW PORTAL
+// 3. MAYA AI CONSOLE SCREEN
 // ==========================================
-const CRMWebViewScreen = ({ navigation }) => {
-  const [isFocused, setIsFocused] = useState(false);
-
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => setIsFocused(true));
-    return unsubscribe;
-  }, [navigation]);
-
-  return (
-    <SafeAreaView style={styles.container}>
-      {isFocused ? (
-        <WebView
-          source={{ uri: 'https://pap-crm.vercel.app/' }}
-          style={styles.webview}
-          startInLoadingState={true}
-          scalesPageToFit={true}
-          renderLoading={() => (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#09090b' }}>
-              <ActivityIndicator color="#00E5FF" size="large" />
-            </View>
-          )}
-        />
-      ) : (
-        <View style={{ flex: 1, backgroundColor: '#09090b' }} />
-      )}
-    </SafeAreaView>
-  );
-};
-
-// ==========================================
-// 4. MAYA AI CONSOLE (SAFE ASYNC INIT)
-// ==========================================
-const MayaAgentConsoleScreen = () => {
+const MayaAgentConsoleScreen = ({ navigation }) => {
   const [messages, setMessages] = useState([
-    { id: '1', text: 'Greetings Executive. Maya operations core online. How can I assist with your leads, cargo manifests, or reminders today?', isBot: true }
+    { id: '1', text: 'Greetings Executive. Maya & Aether core online. Direct me to process lead records, query manifests, or schedule real-time reminders.', isBot: true }
   ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const mayaRef = useRef(null);
-
-  useEffect(() => {
-    try {
-      mayaRef.current = new MayaAgent();
-    } catch (e) {
-      console.warn('Maya agent instantiation deferred:', e);
-    }
-  }, []);
-
-  const simulateTypingResponse = (fullText) => {
-    let currentLength = 0;
-    const messageId = Date.now().toString();
-
-    setMessages(prev => [...prev, { id: messageId, text: '', isBot: true }]);
-
-    const interval = setInterval(() => {
-      currentLength += 3;
-      const nextChunk = fullText.slice(0, currentLength);
-
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, text: nextChunk } : m));
-
-      if (currentLength >= fullText.length) {
-        clearInterval(interval);
-        setIsTyping(false);
-      }
-    }, 20);
-  };
+  const mayaEngine = useRef(new OperationalMayaEngine()).current;
 
   const handleSend = async () => {
     if (!inputText.trim() || isTyping) return;
-
     const userMsg = inputText;
     setMessages(prev => [...prev, { id: Date.now().toString(), text: userMsg, isBot: false }]);
     setInputText('');
     setIsTyping(true);
 
-    let adviceText = 'Maya module updating. Request processed.';
-    if (mayaRef.current && typeof mayaRef.current.handleUserDirective === 'function') {
-      try {
-        const response = await mayaRef.current.handleUserDirective(userMsg);
-        adviceText = response.advice || response;
-      } catch (err) {
-        adviceText = 'Executive directive received and logged.';
-      }
-    }
-    simulateTypingResponse(adviceText);
+    const response = await mayaEngine.parseAndExecute(userMsg);
+    
+    setTimeout(() => {
+      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), text: response, isBot: true }]);
+      setIsTyping(false);
+    }, 600);
   };
 
   return (
     <SafeAreaView style={styles.container}>
+      <View style={styles.screenHeader}>
+        <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 12 }}>
+          <Menu size={22} color="#00E5FF" />
+        </TouchableOpacity>
+        <Text style={styles.screenHeaderTitle}>Maya AI Advisory & Ops</Text>
+      </View>
+
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90} style={{ flex: 1 }}>
         <FlatList
           data={messages}
@@ -312,30 +325,14 @@ const MayaAgentConsoleScreen = () => {
           contentContainerStyle={{ padding: 20 }}
           renderItem={({ item }) => (
             <View style={[styles.msgBubble, item.isBot ? styles.botBubble : styles.userBubble]}>
-              {item.isBot && (
-                <View style={styles.botAvatar}>
-                  <Bot size={12} color="#00E5FF" />
-                </View>
-              )}
+              {item.isBot && <View style={styles.botAvatar}><Bot size={12} color="#00E5FF" /></View>}
               <Text style={[styles.msgText, !item.isBot && styles.userMsgText]}>{item.text}</Text>
             </View>
           )}
         />
-        {isTyping && (
-          <View style={{ paddingHorizontal: 20, paddingBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
-            <Bot size={14} color="#00E5FF" style={{ marginRight: 6 }} />
-            <Text style={{ color: '#00E5FF', fontSize: 11 }}>Maya is processing query...</Text>
-          </View>
-        )}
         <View style={styles.inputContainer}>
-          <TextInput
-            style={styles.chatInput}
-            placeholder="Command Maya..."
-            placeholderTextColor="#4a4a55"
-            value={inputText}
-            onChangeText={setInputText}
-          />
-          <TouchableOpacity style={[styles.sendButton, isTyping && styles.sendButtonDisabled]} onPress={handleSend} disabled={isTyping} activeOpacity={0.85}>
+          <TextInput style={styles.chatInput} placeholder="Command Maya..." placeholderTextColor="#4a4a55" value={inputText} onChangeText={setInputText} />
+          <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
             <Send size={14} color="#09090b" />
           </TouchableOpacity>
         </View>
@@ -345,44 +342,137 @@ const MayaAgentConsoleScreen = () => {
 };
 
 // ==========================================
-// 5. TAB NAVIGATOR WITH LAZY SCREEN MOUNTING
+// 4. REPORTS VAULT SCREEN (PDF DOWNLOADS)
 // ==========================================
-function MainTabNavigator() {
+const ReportsVaultScreen = ({ navigation }) => {
+  const [generating, setGenerating] = useState(false);
+
+  const generatePDFReport = async (reportTitle) => {
+    setGenerating(true);
+    const htmlContent = `
+      <html>
+        <body style="font-family: Helvetica; padding: 20px; color: #111;">
+          <h1 style="color: #00E5FF;">OGAMOTO Enterprise Report</h1>
+          <h2>${reportTitle}</h2>
+          <hr />
+          <p>Generated Date: ${new Date().toLocaleDateString()}</p>
+          <h3>Active Leads Summary</h3>
+          <ul>
+            ${GlobalDataStore.leads.map(l => `<li><strong>${l.name}</strong> - ${l.vehicle} ($${l.deposit})</li>`).join('')}
+          </ul>
+        </body>
+      </html>
+    `;
+    try {
+      const { uri } = await Print.printToFileAsync({ html: htmlContent });
+      await Sharing.shareAsync(uri);
+    } catch (e) {
+      Alert.alert('Report Error', 'Could not generate or share PDF document.');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   return (
-    <Tab.Navigator
-      screenOptions={{
-        headerShown: true,
-        headerStyle: { backgroundColor: '#09090b', borderBottomWidth: 1, borderBottomColor: '#1a1a22' },
-        headerTintColor: '#00E5FF',
-        headerTitleStyle: { fontWeight: '700', letterSpacing: 0.5 },
-        tabBarStyle: { backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', height: 62, paddingBottom: 8, paddingTop: 6 },
-        tabBarActiveTintColor: '#00E5FF',
-        tabBarInactiveTintColor: '#555',
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
-        lazy: true,
-      }}
-    >
-      <Tab.Screen
-        name="Dashboard"
-        component={DashboardScreen}
-        options={{ tabBarIcon: ({ color }) => <LayoutDashboard size={20} color={color} /> }}
+    <SafeAreaView style={styles.container}>
+      <View style={styles.screenHeader}>
+        <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 12 }}>
+          <Menu size={22} color="#00E5FF" />
+        </TouchableOpacity>
+        <Text style={styles.screenHeaderTitle}>Reports Vault</Text>
+      </View>
+
+      <ScrollView style={{ padding: 20 }}>
+        {GlobalDataStore.reports.map((item) => (
+          <View key={item.id} style={styles.reportCard}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <FileText size={24} color="#00E5FF" style={{ marginRight: 14 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14 }}>{item.title}</Text>
+                <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>{item.date} · {item.size}</Text>
+              </View>
+            </View>
+            <TouchableOpacity style={styles.downloadBtn} onPress={() => generatePDFReport(item.title)} disabled={generating}>
+              <Download size={16} color="#09090b" />
+            </TouchableOpacity>
+          </View>
+        ))}
+      </ScrollView>
+    </SafeAreaView>
+  );
+};
+
+// ==========================================
+// 5. CRM WEBVIEW PORTAL SCREEN
+// ==========================================
+const CRMWebViewScreen = ({ navigation, route }) => {
+  const targetUri = route.params?.uri || 'https://pap-crm.vercel.app/';
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.screenHeader}>
+        <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 12 }}>
+          <Menu size={22} color="#00E5FF" />
+        </TouchableOpacity>
+        <Text style={styles.screenHeaderTitle}>CRM Web Portal</Text>
+      </View>
+      <WebView source={{ uri: targetUri }} style={{ flex: 1 }} startInLoadingState={true} />
+    </SafeAreaView>
+  );
+};
+
+// ==========================================
+// CUSTOM DRAWER MENU CONTENT
+// ==========================================
+function CustomDrawerContent(props) {
+  return (
+    <DrawerContentScrollView {...props} style={{ backgroundColor: '#09090b' }}>
+      <View style={styles.drawerHeader}>
+        <Bot size={32} color="#00E5FF" />
+        <Text style={styles.drawerBrandText}>OGAMOTO CRM</Text>
+        <Text style={styles.drawerUserText}>John Doe (Admin)</Text>
+      </View>
+      <DrawerItemList {...props} />
+      <DrawerItem
+        label="Logout"
+        icon={({ color }) => <LogOut size={18} color="#ff4d4d" />}
+        labelStyle={{ color: '#ff4d4d', fontWeight: '600' }}
+        onPress={() => props.navigation.reset({ index: 0, routes: [{ name: 'Login' }] })}
       />
-      <Tab.Screen
-        name="Maya AI"
-        component={MayaAgentConsoleScreen}
-        options={{ tabBarIcon: ({ color }) => <Bot size={20} color={color} /> }}
-      />
-      <Tab.Screen
-        name="CRM Portal"
-        component={CRMWebViewScreen}
-        options={{ tabBarIcon: ({ color }) => <Globe size={20} color={color} /> }}
-      />
-    </Tab.Navigator>
+    </DrawerContentScrollView>
   );
 }
 
 // ==========================================
-// 6. ROOT APP
+// MAIN DRAWER NAVIGATOR (SIDEBAR REPLACEMENT)
+// ==========================================
+function MainDrawerNavigator() {
+  return (
+    <Drawer.Navigator
+      drawerContent={(props) => <CustomDrawerContent {...props} />}
+      screenOptions={{
+        headerShown: false,
+        drawerStyle: { backgroundColor: '#09090b', width: 280 },
+        drawerActiveTintColor: '#00E5FF',
+        drawerInactiveTintColor: '#8a8a94',
+        drawerLabelStyle: { fontWeight: '600', fontSize: 13 },
+      }}
+    >
+      <Drawer.Screen name="Dashboard" component={DashboardScreen} options={{ drawerIcon: ({ color }) => <LayoutDashboard size={18} color={color} /> }} />
+      <Drawer.Screen name="Maya AI Console" component={MayaAgentConsoleScreen} options={{ drawerIcon: ({ color }) => <Bot size={18} color={color} /> }} />
+      <Drawer.Screen name="Leads Pipeline" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/leads' }} options={{ drawerIcon: ({ color }) => <TrendingUp size={18} color={color} /> }} />
+      <Drawer.Screen name="Ports" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/ports' }} options={{ drawerIcon: ({ color }) => <Anchor size={18} color={color} /> }} />
+      <Drawer.Screen name="Shipments" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/shipments' }} options={{ drawerIcon: ({ color }) => <Container size={18} color={color} /> }} />
+      <Drawer.Screen name="Logistics" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/logistics' }} options={{ drawerIcon: ({ color }) => <Truck size={18} color={color} /> }} />
+      <Drawer.Screen name="Financing Partners" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/financing' }} options={{ drawerIcon: ({ color }) => <Layers size={18} color={color} /> }} />
+      <Drawer.Screen name="Workflow Console" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/workflow' }} options={{ drawerIcon: ({ color }) => <Sliders size={18} color={color} /> }} />
+      <Drawer.Screen name="Reports Vault" component={ReportsVaultScreen} options={{ drawerIcon: ({ color }) => <FileText size={18} color={color} /> }} />
+      <Drawer.Screen name="Settings" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/settings' }} options={{ drawerIcon: ({ color }) => <Settings size={18} color={color} /> }} />
+    </Drawer.Navigator>
+  );
+}
+
+// ==========================================
+// ROOT APP
 // ==========================================
 export default function App() {
   return (
@@ -390,7 +480,7 @@ export default function App() {
       <NavigationContainer>
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen name="Login" component={LoginScreen} />
-          <Stack.Screen name="MainDashboard" component={MainTabNavigator} />
+          <Stack.Screen name="MainDrawer" component={MainDrawerNavigator} />
         </Stack.Navigator>
       </NavigationContainer>
     </GestureHandlerRootView>
@@ -402,71 +492,50 @@ export default function App() {
 // ==========================================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#09090b' },
-  webview: { flex: 1, backgroundColor: '#09090b' },
+  screenHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#1a1a22', backgroundColor: '#09090b' },
+  screenHeaderTitle: { color: '#00E5FF', fontWeight: '800', fontSize: 16, letterSpacing: 0.5 },
 
   loginContainer: { flex: 1, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
-  loginGlow: {
-    position: 'absolute',
-    width: width * 1.4,
-    height: width * 1.4,
-    borderRadius: width * 0.7,
-    backgroundColor: '#00E5FF',
-    opacity: 0.06,
-    top: -width * 0.6,
-  },
-  loginCard: {
-    width: width * 0.85,
-    padding: 28,
-    backgroundColor: '#101014',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#1a1a22',
-    shadowColor: '#00E5FF',
-    shadowOpacity: 0.08,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
-  },
-  brandBadge: {
-    alignSelf: 'center',
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: '#09090b',
-    borderWidth: 1,
-    borderColor: '#1a1a22',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
+  loginGlow: { position: 'absolute', width: width * 1.4, height: width * 1.4, borderRadius: width * 0.7, backgroundColor: '#00E5FF', opacity: 0.06, top: -width * 0.6 },
+  loginCard: { width: width * 0.85, padding: 28, backgroundColor: '#101014', borderRadius: 24, borderWidth: 1, borderColor: '#1a1a22' },
+  brandBadge: { alignSelf: 'center', width: 52, height: 52, borderRadius: 16, backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
   loginBrandText: { fontSize: 30, fontWeight: '900', color: '#00E5FF', textAlign: 'center', letterSpacing: 6 },
   loginTagline: { fontSize: 10, color: '#fff', opacity: 0.4, textAlign: 'center', letterSpacing: 2, marginBottom: 32, marginTop: 6 },
   inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 14, marginBottom: 16, paddingHorizontal: 16 },
   inputIcon: { marginRight: 12 },
   authInputField: { flex: 1, height: 50, color: '#fff', fontSize: 14 },
-  loginSubmitButton: { backgroundColor: '#00E5FF', height: 52, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 10, shadowColor: '#00E5FF', shadowOpacity: 0.35, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
+  loginSubmitButton: { backgroundColor: '#00E5FF', height: 52, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
   loginSubmitButtonDisabled: { opacity: 0.7 },
   loginButtonText: { color: '#09090b', fontWeight: '800', fontSize: 13, letterSpacing: 1 },
-  loginFooterNote: { color: '#3a3a44', fontSize: 10, textAlign: 'center', marginTop: 20, letterSpacing: 0.5 },
 
-  logoutIconButton: { padding: 9, backgroundColor: '#1a1014', borderRadius: 10, borderWidth: 1, borderColor: '#331111' },
+  drawerHeader: { padding: 20, borderBottomWidth: 1, borderBottomColor: '#1a1a22', marginBottom: 10 },
+  drawerBrandText: { color: '#00E5FF', fontWeight: '900', fontSize: 18, marginTop: 8 },
+  drawerUserText: { color: '#666', fontSize: 12, marginTop: 2 },
+
+  refreshBtn: { padding: 8, backgroundColor: '#101014', borderRadius: 10, borderWidth: 1, borderColor: '#1a1a22' },
   sectionHeading: { fontSize: 22, fontWeight: '800', color: '#fff' },
   sectionEyebrow: { fontSize: 11, color: '#666', marginTop: 2, fontWeight: '600' },
-  sectionSubHeading: { fontSize: 12, fontWeight: '700', color: '#00E5FF', marginTop: 24, marginBottom: 16, letterSpacing: 1 },
+  sectionSubHeading: { fontSize: 12, fontWeight: '700', color: '#00E5FF', letterSpacing: 1 },
 
   statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
   dashboardMetricItem: { backgroundColor: '#101014', width: '48%', padding: 18, borderRadius: 18, borderWidth: 1, borderColor: '#1a1a22' },
-  activeItemCard: { borderColor: '#00E5FF', shadowColor: '#00E5FF', shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  activeItemCard: { borderColor: '#00E5FF' },
   metricIconWrap: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
   metricIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.1)' },
   dashboardMetricNumber: { fontSize: 22, fontWeight: '800', color: '#fff', marginTop: 12 },
   dashboardMetricLabel: { color: '#777', fontSize: 11, marginTop: 4, fontWeight: '600' },
 
+  timeFilterContainer: { flexDirection: 'row', backgroundColor: '#101014', borderRadius: 8, padding: 2, borderWidth: 1, borderColor: '#1a1a22' },
+  timeFilterBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
+  timeFilterBadgeActive: { backgroundColor: '#00E5FF' },
+  timeFilterText: { color: '#666', fontSize: 10, fontWeight: '700' },
+  timeFilterTextActive: { color: '#09090b' },
+
   systemStatusLedgerAlertBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 16, borderRadius: 14, borderWidth: 1, borderColor: '#1a1a22', marginTop: 12 },
   ledgerIconWrap: { width: 38, height: 38, borderRadius: 10, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   activeDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#00E5A0' },
 
-  graphContainerCanvas: { backgroundColor: '#101014', padding: 20, borderRadius: 20, borderWidth: 1, borderColor: '#1a1a22', height: 230, justifyContent: 'flex-end' },
+  graphContainerCanvas: { backgroundColor: '#101014', padding: 20, borderRadius: 20, borderWidth: 1, borderColor: '#1a1a22', height: 210, justifyContent: 'flex-end' },
   graphBarsAxisContainer: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'flex-end', width: '100%' },
   individualBarColumn: { alignItems: 'center' },
   interactiveChartBarLine: { width: 34, backgroundColor: '#00E5FF', borderRadius: 6 },
@@ -482,6 +551,8 @@ const styles = StyleSheet.create({
 
   inputContainer: { flexDirection: 'row', padding: 16, backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', alignItems: 'center' },
   chatInput: { flex: 1, backgroundColor: '#101014', color: '#fff', paddingHorizontal: 18, height: 48, borderRadius: 24, marginRight: 12, borderWidth: 1, borderColor: '#1a1a22' },
-  sendButton: { backgroundColor: '#00E5FF', width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', shadowColor: '#00E5FF', shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
-  sendButtonDisabled: { opacity: 0.5 },
+  sendButton: { backgroundColor: '#00E5FF', width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
+
+  reportCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#101014', padding: 16, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 12 },
+  downloadBtn: { backgroundColor: '#00E5FF', padding: 10, borderRadius: 10 },
 });
