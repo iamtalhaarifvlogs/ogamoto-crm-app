@@ -1,26 +1,35 @@
 import 'react-native-gesture-handler';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
-  Dimensions, FlatList, KeyboardAvoidingView, Platform, Alert, ScrollView, SafeAreaView, ActivityIndicator
+  Dimensions, FlatList, KeyboardAvoidingView, Platform, Alert, ScrollView,
+  SafeAreaView, ActivityIndicator, Animated, Easing, LayoutAnimation, UIManager,
+  RefreshControl,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList, DrawerItem } from '@react-navigation/drawer';
 import { WebView } from 'react-native-webview';
 
-// Expo Modules for Notifications & PDF Generation
+// Expo Modules for Notifications, PDF Generation & File System
 import * as Notifications from 'expo-notifications';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 
 // Vector Icons
 import {
   Bot, Send, LogIn, LayoutDashboard, Globe,
   User, Lock, TrendingUp, Container, Layers, LogOut, Eye, EyeOff,
-  Menu, FileText, Download, Anchor, Truck, Sliders, Settings, Plus, RefreshCw, Bell
+  Menu, FileText, Download, Anchor, Truck, Sliders, Settings, Plus, RefreshCw, Bell,
+  CheckCircle2, Clock, PackageCheck,
 } from 'lucide-react-native';
+
+// Smooth native layout transitions on Android
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // Notification Handler Setup
 Notifications.setNotificationHandler({
@@ -34,6 +43,7 @@ Notifications.setNotificationHandler({
 const { width } = Dimensions.get('window');
 const Stack = createNativeStackNavigator();
 const Drawer = createDrawerNavigator();
+const ACCENT = '#00E5FF';
 
 // ==========================================
 // CENTRALIZED REAL-TIME DATA STORE
@@ -48,10 +58,17 @@ export const GlobalDataStore = {
     { id: 'S1', container: 'CN-9082', vessel: 'Evergreen Alpha', origin: 'Port Qasim', units: 120, status: 'In Transit' },
     { id: 'S2', container: 'CN-4410', vessel: 'Maersk Sealand', origin: 'KPT Terminal', units: 310, status: 'Customs' },
   ],
-  reports: [
-    { id: 'REP-001', title: 'Q2 Executive Lead Audit', date: '2026-07-15', size: '1.2 MB' },
-    { id: 'REP-002', title: 'Cargo & Logistics Manifest', date: '2026-07-28', size: '850 KB' },
+  financing: [
+    { id: 'F1', partner: 'Habib Bank Credit Line', limit: 500000, used: 182000, status: 'Active' },
   ],
+  listeners: [],
+  subscribe(fn) {
+    this.listeners.push(fn);
+    return () => { this.listeners = this.listeners.filter(l => l !== fn); };
+  },
+  notify() {
+    this.listeners.forEach(fn => fn());
+  },
   addLead(leadData) {
     const newLead = {
       id: Date.now().toString(),
@@ -62,15 +79,38 @@ export const GlobalDataStore = {
       status: 'Active'
     };
     this.leads.unshift(newLead);
+    this.notify();
     return newLead;
+  },
+  stats() {
+    const totalLeadValue = this.leads.reduce((s, l) => s + l.deposit, 0);
+    const totalUnits = this.shipments.reduce((s, sh) => s + sh.units, 0);
+    const byStatus = this.leads.reduce((acc, l) => {
+      acc[l.status] = (acc[l.status] || 0) + 1;
+      return acc;
+    }, {});
+    return { totalLeadValue, totalUnits, byStatus };
   }
 };
 
 // ==========================================
-// MAYA & AETHER AI ENGINE (WITH PUSH NOTIFICATIONS)
+// MAYA & AETHER AI ENGINE (WITH RELIABLE PUSH NOTIFICATIONS)
 // ==========================================
 class OperationalMayaEngine {
+  async ensureAndroidChannel() {
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'Maya Alerts',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: ACCENT,
+      });
+    }
+  }
+
   async requestNotificationPermission() {
+    const existing = await Notifications.getPermissionsAsync();
+    if (existing.status === 'granted') return true;
     const { status } = await Notifications.requestPermissionsAsync();
     return status === 'granted';
   }
@@ -78,13 +118,26 @@ class OperationalMayaEngine {
   async scheduleNotification(seconds, title, body) {
     const hasPermission = await this.requestNotificationPermission();
     if (!hasPermission) {
-      return 'Notification permission missing. Please enable alerts in app settings.';
+      return 'Notification permission is off. Enable alerts for OGAMOTO in your device Settings, then try again.';
     }
+    await this.ensureAndroidChannel();
+
+    const safeSeconds = Math.max(1, Math.round(seconds));
     await Notifications.scheduleNotificationAsync({
-      content: { title: title || 'OGAMOTO Alert', body: body || 'Scheduled Maya action.' },
-      trigger: { seconds: seconds },
+      content: {
+        title: title || 'OGAMOTO Alert',
+        body: body || 'Scheduled Maya action.',
+        sound: true,
+      },
+      trigger: {
+        seconds: safeSeconds,
+        repeats: false,
+        ...(Platform.OS === 'android' ? { channelId: 'default' } : {}),
+      },
     });
-    return `Notification set! Triggering in ${seconds} seconds.`;
+
+    const unit = safeSeconds === 1 ? 'second' : 'seconds';
+    return `Notification confirmed. I'll alert you in ${safeSeconds} ${unit}: "${body}"`;
   }
 
   async parseAndExecute(input) {
@@ -92,36 +145,40 @@ class OperationalMayaEngine {
 
     // 1. Handle Reminders / Notifications
     if (lower.includes('notify') || lower.includes('remind')) {
+      const secMatch = lower.match(/in\s+(\d+)\s*(?:seconds?|secs?|s)\b/);
+      const minMatch = lower.match(/in\s+(\d+)\s*(?:minutes?|mins?|m)\b/);
       let delaySeconds = 60;
-      const minuteMatch = lower.match(/in\s+(\d+)\s+min/);
-      if (minuteMatch) {
-        delaySeconds = parseInt(minuteMatch[1]) * 60;
-      }
-      return await this.scheduleNotification(delaySeconds, 'Maya Reminder', `Action prompt: "${input}"`);
+      if (secMatch) delaySeconds = parseInt(secMatch[1], 10);
+      else if (minMatch) delaySeconds = parseInt(minMatch[1], 10) * 60;
+
+      let taskText = input.trim();
+      const toMatch = input.match(/to\s+(.+)/i);
+      if (toMatch && toMatch[1].trim()) taskText = toMatch[1].trim();
+
+      return await this.scheduleNotification(delaySeconds, 'Maya Reminder', taskText);
     }
 
     // 2. Handle Lead Display Queries
     if (lower.includes('show lead') || lower.includes('list lead') || lower.includes('get lead')) {
-      const leadsList = GlobalDataStore.leads.map(l => `• ${l.name} - ${l.vehicle} ($${l.deposit.toLocaleString()})`).join('\n');
+      const leadsList = GlobalDataStore.leads.map(l => `• ${l.name} - ${l.vehicle} ($${l.deposit.toLocaleString()}) [${l.status}]`).join('\n');
       return `**Current Pipeline Leads:**\n\n${leadsList}`;
     }
 
     // 3. Handle Add Lead Directives (CUD)
     if (lower.includes('add') && lower.includes('lead')) {
-      // Natural language parsing for attributes
       const depositMatch = input.match(/\$(\d+)/) || input.match(/of\s+(\d+)/);
       const depositVal = depositMatch ? depositMatch[1] : 0;
-      
+
       let nameVal = 'New Lead';
       if (lower.includes('add ')) {
-        const afterAdd = input.split(/add/i)[1];
+        const afterAdd = input.split(/add/i)[1] || '';
         const asMatch = afterAdd.split(/as a|for/i)[0];
         if (asMatch && asMatch.trim()) nameVal = asMatch.trim();
       }
 
       let vehicleVal = 'Vehicle Unit';
       if (lower.includes('for ')) {
-        const afterFor = input.split(/for/i)[1];
+        const afterFor = input.split(/for/i)[1] || '';
         const withMatch = afterFor.split(/with|\$/i)[0];
         if (withMatch && withMatch.trim()) vehicleVal = withMatch.trim();
       }
@@ -131,9 +188,117 @@ class OperationalMayaEngine {
       return `**Aether Execution Update:**\nStatus: SUCCESS\nEntity: LEADS\nAction: CREATE\n\nRecorded Lead: ${created.name}\nVehicle: ${created.vehicle}\nDeposit: $${created.deposit.toLocaleString()}`;
     }
 
-    return "Executive directive logged. Aether state synchronized.";
+    return "Executive directive logged. Aether state synchronized. Try: \"show leads\", \"add lead John for Toyota Corolla $5000\", or \"remind me in 30 seconds to...\"";
   }
 }
+
+// ==========================================
+// REUSABLE ANIMATED PRIMITIVES
+// ==========================================
+const AnimatedPressable = ({ onPress, style, children, disabled, hitSlop }) => {
+  const scale = useRef(new Animated.Value(1)).current;
+  const pressIn = () => Animated.spring(scale, { toValue: 0.94, useNativeDriver: true, speed: 40, bounciness: 6 }).start();
+  const pressOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 24, bounciness: 8 }).start();
+  return (
+    <TouchableOpacity
+      activeOpacity={0.9}
+      onPress={onPress}
+      onPressIn={pressIn}
+      onPressOut={pressOut}
+      disabled={disabled}
+      hitSlop={hitSlop || { top: 10, bottom: 10, left: 10, right: 10 }}
+    >
+      <Animated.View style={[style, { transform: [{ scale }] }]}>{children}</Animated.View>
+    </TouchableOpacity>
+  );
+};
+
+const IconButton = ({ onPress, children, style }) => (
+  <AnimatedPressable
+    onPress={onPress}
+    hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+    style={[styles.iconButtonTarget, style]}
+  >
+    {children}
+  </AnimatedPressable>
+);
+
+const FadeSlideIn = ({ children, delay = 0, style }) => {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(14)).current;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: 1, duration: 420, delay, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(translateY, { toValue: 0, duration: 420, delay, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start();
+  }, []);
+  return (
+    <Animated.View style={[style, { opacity, transform: [{ translateY }] }]}>
+      {children}
+    </Animated.View>
+  );
+};
+
+const PulsingDot = ({ color = '#00E5A0', size = 8 }) => {
+  const pulse = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.35, duration: 800, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 800, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+  return <Animated.View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color, opacity: pulse }} />;
+};
+
+const AnimatedChartBar = ({ targetHeight, delay = 0 }) => {
+  const height = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(height, {
+      toValue: targetHeight,
+      duration: 550,
+      delay,
+      easing: Easing.out(Easing.exp),
+      useNativeDriver: false,
+    }).start();
+  }, [targetHeight]);
+  return <Animated.View style={[styles.interactiveChartBarLine, { height }]} />;
+};
+
+const TypingDots = () => {
+  const dots = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
+  useEffect(() => {
+    const anims = dots.map((d, i) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 140),
+          Animated.timing(d, { toValue: 1, duration: 320, useNativeDriver: true }),
+          Animated.timing(d, { toValue: 0, duration: 320, useNativeDriver: true }),
+          Animated.delay((2 - i) * 140),
+        ])
+      )
+    );
+    anims.forEach(a => a.start());
+    return () => anims.forEach(a => a.stop());
+  }, []);
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}>
+      {dots.map((d, i) => (
+        <Animated.View
+          key={i}
+          style={{
+            width: 6, height: 6, borderRadius: 3, backgroundColor: ACCENT, marginHorizontal: 2,
+            opacity: d.interpolate({ inputRange: [0, 1], outputRange: [0.25, 1] }),
+            transform: [{ translateY: d.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }],
+          }}
+        />
+      ))}
+    </View>
+  );
+};
 
 // ==========================================
 // 1. LOGIN SCREEN
@@ -159,248 +324,482 @@ const LoginScreen = ({ navigation }) => {
     <SafeAreaView style={styles.loginContainer}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' }}>
         <View style={styles.loginGlow} />
-        <View style={styles.loginCard}>
-          <View style={styles.brandBadge}><Bot size={26} color="#00E5FF" /></View>
+        <FadeSlideIn style={styles.loginCard}>
+          <View style={styles.brandBadge}><Bot size={22} color={ACCENT} /></View>
           <Text style={styles.loginBrandText}>OGAMOTO</Text>
           <Text style={styles.loginTagline}>ENTERPRISE SYSTEM PORTAL</Text>
 
           <View style={styles.inputWrapper}>
-            <User size={16} color="#00E5FF" style={styles.inputIcon} />
+            <User size={15} color={ACCENT} style={styles.inputIcon} />
             <TextInput style={styles.authInputField} placeholder="Admin Identifier" placeholderTextColor="#4a4a55" value={username} onChangeText={setUsername} autoCapitalize="none" />
           </View>
 
           <View style={styles.inputWrapper}>
-            <Lock size={16} color="#00E5FF" style={styles.inputIcon} />
+            <Lock size={15} color={ACCENT} style={styles.inputIcon} />
             <TextInput style={styles.authInputField} placeholder="Access Key" placeholderTextColor="#4a4a55" secureTextEntry={!showPassword} value={password} onChangeText={setPassword} autoCapitalize="none" />
-            <TouchableOpacity onPress={() => setShowPassword(v => !v)}>
+            <IconButton onPress={() => setShowPassword(v => !v)} style={{ paddingHorizontal: 4 }}>
               {showPassword ? <EyeOff size={16} color="#555" /> : <Eye size={16} color="#555" />}
-            </TouchableOpacity>
+            </IconButton>
           </View>
 
-          <TouchableOpacity style={[styles.loginSubmitButton, isLoggingIn && styles.loginSubmitButtonDisabled]} onPress={handleLogin} disabled={isLoggingIn} activeOpacity={0.85}>
+          <AnimatedPressable style={[styles.loginSubmitButton, isLoggingIn && styles.loginSubmitButtonDisabled]} onPress={handleLogin} disabled={isLoggingIn}>
             {isLoggingIn ? <ActivityIndicator color="#09090b" /> : (
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <LogIn size={16} color="#09090b" style={{ marginRight: 8 }} />
+                <LogIn size={15} color="#09090b" style={{ marginRight: 8 }} />
                 <Text style={styles.loginButtonText}>INITIALIZE INTERFACE</Text>
               </View>
             )}
-          </TouchableOpacity>
-        </View>
+          </AnimatedPressable>
+        </FadeSlideIn>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
 
 // ==========================================
-// 2. DASHBOARD SCREEN WITH LIVE METRICS & FILTERS
+// 2. DASHBOARD SCREEN WITH LIVE METRICS & WORKING FILTERS
 // ==========================================
+const FILTER_DAYS = { '7D': 7, '30D': 30, 'YTD': null };
+
 const DashboardScreen = ({ navigation }) => {
   const [activeDomain, setActiveDomain] = useState('LEADS');
   const [timeFilter, setTimeFilter] = useState('30D');
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [tick, setTick] = useState(0);
 
-  // Compute Live Valuation from store
-  const totalLeadValuation = GlobalDataStore.leads.reduce((sum, item) => sum + item.deposit, 0);
+  // Re-derive data whenever the screen regains focus (e.g. after Maya adds a lead)
+  useFocusEffect(useCallback(() => {
+    setTick(t => t + 1);
+    const unsub = GlobalDataStore.subscribe(() => setTick(t => t + 1));
+    return unsub;
+  }, []));
+
+  const filteredLeads = useMemo(() => {
+    const now = new Date();
+    return GlobalDataStore.leads.filter(l => {
+      const d = new Date(l.date);
+      if (timeFilter === 'YTD') {
+        return d.getFullYear() === now.getFullYear();
+      }
+      const days = FILTER_DAYS[timeFilter];
+      const diffDays = (now - d) / (1000 * 60 * 60 * 24);
+      return diffDays <= days && diffDays >= -1;
+    });
+  }, [timeFilter, tick]);
+
+  const totalLeadValuation = filteredLeads.reduce((sum, item) => sum + item.deposit, 0);
+  const statusBreakdown = filteredLeads.reduce((acc, l) => {
+    acc[l.status] = (acc[l.status] || 0) + 1;
+    return acc;
+  }, {});
+  const shipmentUnits = GlobalDataStore.shipments.reduce((s, sh) => s + sh.units, 0);
+  const inTransitCount = GlobalDataStore.shipments.filter(s => s.status === 'In Transit').length;
+  const customsCount = GlobalDataStore.shipments.filter(s => s.status === 'Customs').length;
+
+  const chartData = activeDomain === 'LEADS'
+    ? filteredLeads.map(l => ({ label: l.name.split(' ')[0], value: l.deposit, max: 50000 }))
+    : GlobalDataStore.shipments.map(s => ({ label: s.container, value: s.units, max: 400 }));
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    setTimeout(() => {
+      setTick(t => t + 1);
+      setRefreshing(false);
+    }, 700);
+  };
+
+  const changeFilter = (range) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setTimeFilter(range);
+  };
+
+  const changeDomain = (domain) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setActiveDomain(domain);
+  };
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={{ padding: 20 }} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={{ padding: 18, paddingBottom: 36 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCENT} colors={[ACCENT]} />}
+      >
         {/* Header */}
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 16 }}>
-              <Menu size={24} color="#00E5FF" />
-            </TouchableOpacity>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 1 }}>
+            <IconButton onPress={() => navigation.openDrawer()} style={{ marginRight: 10 }}>
+              <Menu size={22} color={ACCENT} />
+            </IconButton>
             <View>
               <Text style={styles.sectionHeading}>Executive Command</Text>
               <Text style={styles.sectionEyebrow}>Live operational metrics</Text>
             </View>
           </View>
-          <TouchableOpacity onPress={() => setRefreshKey(prev => prev + 1)} style={styles.refreshBtn}>
-            <RefreshCw size={16} color="#00E5FF" />
-          </TouchableOpacity>
+          <IconButton onPress={onRefresh} style={styles.refreshBtn}>
+            {refreshing ? <ActivityIndicator size="small" color={ACCENT} /> : <RefreshCw size={16} color={ACCENT} />}
+          </IconButton>
         </View>
 
         {/* Dynamic Metric Cards */}
         <View style={styles.statsRow}>
-          <TouchableOpacity style={[styles.dashboardMetricItem, activeDomain === 'LEADS' && styles.activeItemCard]} onPress={() => setActiveDomain('LEADS')}>
+          <AnimatedPressable style={[styles.dashboardMetricItem, activeDomain === 'LEADS' && styles.activeItemCard]} onPress={() => changeDomain('LEADS')}>
             <View style={[styles.metricIconWrap, activeDomain === 'LEADS' && styles.metricIconWrapActive]}>
-              <TrendingUp size={18} color={activeDomain === 'LEADS' ? '#00E5FF' : '#666'} />
+              <TrendingUp size={17} color={activeDomain === 'LEADS' ? ACCENT : '#666'} />
             </View>
             <Text style={styles.dashboardMetricNumber}>${totalLeadValuation.toLocaleString()}</Text>
-            <Text style={styles.dashboardMetricLabel}>Live Leads Value</Text>
-          </TouchableOpacity>
+            <Text style={styles.dashboardMetricLabel}>Leads Value ({timeFilter})</Text>
+          </AnimatedPressable>
 
-          <TouchableOpacity style={[styles.dashboardMetricItem, activeDomain === 'SHIPMENTS' && styles.activeItemCard]} onPress={() => setActiveDomain('SHIPMENTS')}>
+          <AnimatedPressable style={[styles.dashboardMetricItem, activeDomain === 'SHIPMENTS' && styles.activeItemCard]} onPress={() => changeDomain('SHIPMENTS')}>
             <View style={[styles.metricIconWrap, activeDomain === 'SHIPMENTS' && styles.metricIconWrapActive]}>
-              <Container size={18} color={activeDomain === 'SHIPMENTS' ? '#00E5FF' : '#666'} />
+              <Container size={17} color={activeDomain === 'SHIPMENTS' ? ACCENT : '#666'} />
             </View>
-            <Text style={styles.dashboardMetricNumber}>{GlobalDataStore.shipments.length}</Text>
-            <Text style={styles.dashboardMetricLabel}>Active Cargo Manifests</Text>
-          </TouchableOpacity>
+            <Text style={styles.dashboardMetricNumber}>{shipmentUnits}</Text>
+            <Text style={styles.dashboardMetricLabel}>Units In Transit</Text>
+          </AnimatedPressable>
         </View>
 
-        {/* Time-Range Filter Bar */}
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 24, marginBottom: 12 }}>
+        {/* Time-Range Filter Bar — now actually filters the data above */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 22, marginBottom: 10 }}>
           <Text style={styles.sectionSubHeading}>Analytical Vector ({activeDomain})</Text>
           <View style={styles.timeFilterContainer}>
             {['7D', '30D', 'YTD'].map((range) => (
-              <TouchableOpacity key={range} onPress={() => setTimeFilter(range)} style={[styles.timeFilterBadge, timeFilter === range && styles.timeFilterBadgeActive]}>
+              <AnimatedPressable key={range} onPress={() => changeFilter(range)} style={[styles.timeFilterBadge, timeFilter === range && styles.timeFilterBadgeActive]}>
                 <Text style={[styles.timeFilterText, timeFilter === range && styles.timeFilterTextActive]}>{range}</Text>
-              </TouchableOpacity>
+              </AnimatedPressable>
             ))}
           </View>
         </View>
+        {activeDomain === 'SHIPMENTS' && (
+          <Text style={styles.filterNote}>Shipment data is real-time and not date-filtered.</Text>
+        )}
 
-        {/* Interactive Dynamic Chart */}
+        {/* Interactive Animated Chart */}
         <View style={styles.graphContainerCanvas}>
-          <View style={styles.graphBarsAxisContainer}>
-            {GlobalDataStore.leads.map((item, index) => {
-              const barHeight = Math.min(Math.max((item.deposit / 50000) * 150, 40), 160);
-              return (
-                <View key={index} style={styles.individualBarColumn}>
-                  <Text style={styles.barMarkerValueText}>${(item.deposit / 1000).toFixed(0)}k</Text>
-                  <View style={[styles.interactiveChartBarLine, { height: barHeight }]} />
-                  <Text style={styles.barMarkerLabels}>{item.name.split(' ')[0]}</Text>
-                </View>
-              );
-            })}
-          </View>
-        </View>
-
-        {/* Partner Ledger */}
-        <Text style={styles.sectionSubHeading}>Financing Partner Ledger</Text>
-        <View style={styles.systemStatusLedgerAlertBox}>
-          <View style={styles.ledgerIconWrap}><Layers size={18} color="#00E5FF" /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Habib Bank Credit Line</Text>
-            <Text style={{ color: '#8a8a94', fontSize: 11, marginTop: 3 }}>Limit: $500,000 · Active</Text>
-          </View>
-          <View style={styles.activeDot} />
-        </View>
-      </ScrollView>
-    </SafeAreaView>
-  );
-};
-
-// ==========================================
-// 3. MAYA AI CONSOLE SCREEN
-// ==========================================
-const MayaAgentConsoleScreen = ({ navigation }) => {
-  const [messages, setMessages] = useState([
-    { id: '1', text: 'Greetings Executive. Maya & Aether core online. Direct me to process lead records, query manifests, or schedule real-time reminders.', isBot: true }
-  ]);
-  const [inputText, setInputText] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const mayaEngine = useRef(new OperationalMayaEngine()).current;
-
-  const handleSend = async () => {
-    if (!inputText.trim() || isTyping) return;
-    const userMsg = inputText;
-    setMessages(prev => [...prev, { id: Date.now().toString(), text: userMsg, isBot: false }]);
-    setInputText('');
-    setIsTyping(true);
-
-    const response = await mayaEngine.parseAndExecute(userMsg);
-    
-    setTimeout(() => {
-      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), text: response, isBot: true }]);
-      setIsTyping(false);
-    }, 600);
-  };
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.screenHeader}>
-        <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 12 }}>
-          <Menu size={22} color="#00E5FF" />
-        </TouchableOpacity>
-        <Text style={styles.screenHeaderTitle}>Maya AI Advisory & Ops</Text>
-      </View>
-
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90} style={{ flex: 1 }}>
-        <FlatList
-          data={messages}
-          keyExtractor={item => item.id}
-          contentContainerStyle={{ padding: 20 }}
-          renderItem={({ item }) => (
-            <View style={[styles.msgBubble, item.isBot ? styles.botBubble : styles.userBubble]}>
-              {item.isBot && <View style={styles.botAvatar}><Bot size={12} color="#00E5FF" /></View>}
-              <Text style={[styles.msgText, !item.isBot && styles.userMsgText]}>{item.text}</Text>
+          {chartData.length === 0 ? (
+            <Text style={styles.emptyStateText}>No {activeDomain.toLowerCase()} in this range.</Text>
+          ) : (
+            <View style={styles.graphBarsAxisContainer}>
+              {chartData.map((item, index) => {
+                const barHeight = Math.min(Math.max((item.value / item.max) * 150, 30), 160);
+                return (
+                  <View key={index} style={styles.individualBarColumn}>
+                    <Text style={styles.barMarkerValueText}>
+                      {activeDomain === 'LEADS' ? `$${(item.value / 1000).toFixed(0)}k` : item.value}
+                    </Text>
+                    <AnimatedChartBar targetHeight={barHeight} delay={index * 80} />
+                    <Text style={styles.barMarkerLabels}>{item.label}</Text>
+                  </View>
+                );
+              })}
             </View>
           )}
-        />
-        <View style={styles.inputContainer}>
-          <TextInput style={styles.chatInput} placeholder="Command Maya..." placeholderTextColor="#4a4a55" value={inputText} onChangeText={setInputText} />
-          <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
-            <Send size={14} color="#09090b" />
-          </TouchableOpacity>
         </View>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
-  );
-};
 
-// ==========================================
-// 4. REPORTS VAULT SCREEN (PDF DOWNLOADS)
-// ==========================================
-const ReportsVaultScreen = ({ navigation }) => {
-  const [generating, setGenerating] = useState(false);
-
-  const generatePDFReport = async (reportTitle) => {
-    setGenerating(true);
-    const htmlContent = `
-      <html>
-        <body style="font-family: Helvetica; padding: 20px; color: #111;">
-          <h1 style="color: #00E5FF;">OGAMOTO Enterprise Report</h1>
-          <h2>${reportTitle}</h2>
-          <hr />
-          <p>Generated Date: ${new Date().toLocaleDateString()}</p>
-          <h3>Active Leads Summary</h3>
-          <ul>
-            ${GlobalDataStore.leads.map(l => `<li><strong>${l.name}</strong> - ${l.vehicle} ($${l.deposit})</li>`).join('')}
-          </ul>
-        </body>
-      </html>
-    `;
-    try {
-      const { uri } = await Print.printToFileAsync({ html: htmlContent });
-      await Sharing.shareAsync(uri);
-    } catch (e) {
-      Alert.alert('Report Error', 'Could not generate or share PDF document.');
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.screenHeader}>
-        <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 12 }}>
-          <Menu size={22} color="#00E5FF" />
-        </TouchableOpacity>
-        <Text style={styles.screenHeaderTitle}>Reports Vault</Text>
-      </View>
-
-      <ScrollView style={{ padding: 20 }}>
-        {GlobalDataStore.reports.map((item) => (
-          <View key={item.id} style={styles.reportCard}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <FileText size={24} color="#00E5FF" style={{ marginRight: 14 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14 }}>{item.title}</Text>
-                <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>{item.date} · {item.size}</Text>
-              </View>
+        {/* Pipeline Status Breakdown */}
+        <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Pipeline Status ({timeFilter})</Text>
+        <View style={styles.statusRow}>
+          {['Active', 'Pipeline', 'Closed'].map((s) => (
+            <View key={s} style={styles.statusChip}>
+              <Text style={styles.statusChipCount}>{statusBreakdown[s] || 0}</Text>
+              <Text style={styles.statusChipLabel}>{s}</Text>
             </View>
-            <TouchableOpacity style={styles.downloadBtn} onPress={() => generatePDFReport(item.title)} disabled={generating}>
-              <Download size={16} color="#09090b" />
-            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Recent Leads List */}
+        <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Recent Leads</Text>
+        {filteredLeads.length === 0 ? (
+          <Text style={styles.emptyStateText}>No leads recorded in this window.</Text>
+        ) : filteredLeads.map((lead, i) => (
+          <FadeSlideIn key={lead.id} delay={i * 60} style={styles.leadRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.leadName}>{lead.name}</Text>
+              <Text style={styles.leadSub}>{lead.vehicle} · {lead.date}</Text>
+            </View>
+            <Text style={styles.leadDeposit}>${lead.deposit.toLocaleString()}</Text>
+            <View style={[styles.statusBadge, statusColor(lead.status)]}>
+              <Text style={styles.statusBadgeText}>{lead.status}</Text>
+            </View>
+          </FadeSlideIn>
+        ))}
+
+        {/* Shipments Snapshot */}
+        <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Cargo & Logistics</Text>
+        <View style={styles.shipmentSummaryRow}>
+          <View style={styles.shipmentSummaryChip}>
+            <Clock size={14} color={ACCENT} />
+            <Text style={styles.shipmentSummaryText}>{inTransitCount} In Transit</Text>
+          </View>
+          <View style={styles.shipmentSummaryChip}>
+            <PackageCheck size={14} color={ACCENT} />
+            <Text style={styles.shipmentSummaryText}>{customsCount} In Customs</Text>
+          </View>
+        </View>
+        {GlobalDataStore.shipments.map((s, i) => (
+          <FadeSlideIn key={s.id} delay={i * 60} style={styles.shipmentRow}>
+            <Container size={16} color="#8a8a94" style={{ marginRight: 10 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.leadName}>{s.container} · {s.vessel}</Text>
+              <Text style={styles.leadSub}>{s.origin} · {s.units} units</Text>
+            </View>
+            <Text style={styles.shipmentStatusText}>{s.status}</Text>
+          </FadeSlideIn>
+        ))}
+
+        {/* Partner Ledger */}
+        <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Financing Partner Ledger</Text>
+        {GlobalDataStore.financing.map((f) => (
+          <View key={f.id} style={styles.systemStatusLedgerAlertBox}>
+            <View style={styles.ledgerIconWrap}><Layers size={17} color={ACCENT} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{f.partner}</Text>
+              <Text style={{ color: '#8a8a94', fontSize: 11, marginTop: 3 }}>
+                Limit: ${f.limit.toLocaleString()} · Used: ${f.used.toLocaleString()} · {f.status}
+              </Text>
+            </View>
+            <PulsingDot />
           </View>
         ))}
       </ScrollView>
     </SafeAreaView>
   );
 };
+
+const statusColor = (status) => {
+  if (status === 'Active') return { backgroundColor: 'rgba(0,229,160,0.12)', borderColor: '#00E5A0' };
+  if (status === 'Pipeline') return { backgroundColor: 'rgba(0,229,255,0.12)', borderColor: ACCENT };
+  return { backgroundColor: 'rgba(140,140,150,0.12)', borderColor: '#8a8a94' };
+};
+
+// ==========================================
+// 3. MAYA AI CONSOLE SCREEN (FIXED: no longer gets stuck)
+// ==========================================
+const MayaAgentConsoleScreen = ({ navigation }) => {
+  const [messages, setMessages] = useState([
+    { id: 'seed-1', text: 'Greetings Executive. Maya & Aether core online. Direct me to process lead records, query manifests, or schedule real-time reminders.', isBot: true }
+  ]);
+  const [inputText, setInputText] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const mayaEngine = useRef(new OperationalMayaEngine()).current;
+  const idCounter = useRef(1);
+  const listRef = useRef(null);
+
+  const nextId = () => {
+    idCounter.current += 1;
+    return `${Date.now()}-${idCounter.current}`;
+  };
+
+  const handleSend = async () => {
+    const trimmed = inputText.trim();
+    if (!trimmed || isTyping) return;
+
+    setMessages(prev => [...prev, { id: nextId(), text: trimmed, isBot: false }]);
+    setInputText('');
+    setIsTyping(true);
+
+    let responseText;
+    try {
+      responseText = await mayaEngine.parseAndExecute(trimmed);
+    } catch (err) {
+      responseText = 'Aether encountered an error processing that directive. Please try again.';
+    }
+
+    // Small delay purely for a natural typing feel — always resolves, never blocks future sends
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    setMessages(prev => [...prev, { id: nextId(), text: responseText, isBot: true }]);
+    setIsTyping(false);
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.screenHeader}>
+        <IconButton onPress={() => navigation.openDrawer()} style={{ marginRight: 10 }}>
+          <Menu size={20} color={ACCENT} />
+        </IconButton>
+        <Text style={styles.screenHeaderTitle}>Maya AI Advisory & Ops</Text>
+      </View>
+
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90} style={{ flex: 1 }}>
+        <FlatList
+          ref={listRef}
+          data={messages}
+          keyExtractor={item => item.id}
+          contentContainerStyle={{ padding: 18 }}
+          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+          renderItem={({ item }) => (
+            <FadeSlideIn style={[styles.msgBubble, item.isBot ? styles.botBubble : styles.userBubble]}>
+              {item.isBot && <View style={styles.botAvatar}><Bot size={12} color={ACCENT} /></View>}
+              <Text style={[styles.msgText, !item.isBot && styles.userMsgText]}>{item.text}</Text>
+            </FadeSlideIn>
+          )}
+          ListFooterComponent={isTyping ? (
+            <View style={[styles.msgBubble, styles.botBubble, { alignItems: 'center' }]}>
+              <View style={styles.botAvatar}><Bot size={12} color={ACCENT} /></View>
+              <TypingDots />
+            </View>
+          ) : null}
+        />
+        <View style={styles.inputContainer}>
+          <TextInput
+            style={styles.chatInput}
+            placeholder="Command Maya..."
+            placeholderTextColor="#4a4a55"
+            value={inputText}
+            onChangeText={setInputText}
+            onSubmitEditing={handleSend}
+            returnKeyType="send"
+            editable={!isTyping}
+          />
+          <AnimatedPressable style={[styles.sendButton, (isTyping || !inputText.trim()) && { opacity: 0.5 }]} onPress={handleSend} disabled={isTyping || !inputText.trim()}>
+            <Send size={14} color="#09090b" />
+          </AnimatedPressable>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+};
+
+// ==========================================
+// 4. REPORTS VAULT SCREEN (fixed filenames + full data coverage)
+// ==========================================
+const sanitizeFileName = (title) =>
+  title.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 60);
+
+const buildReportHtml = (reportTitle) => {
+  const stats = GlobalDataStore.stats();
+  const generatedDate = new Date().toLocaleDateString();
+
+  const leadsRows = GlobalDataStore.leads.map(l => `
+    <tr>
+      <td>${l.name}</td><td>${l.vehicle}</td><td>$${l.deposit.toLocaleString()}</td>
+      <td>${l.date}</td><td>${l.status}</td>
+    </tr>`).join('');
+
+  const shipmentRows = GlobalDataStore.shipments.map(s => `
+    <tr>
+      <td>${s.container}</td><td>${s.vessel}</td><td>${s.origin}</td>
+      <td>${s.units}</td><td>${s.status}</td>
+    </tr>`).join('');
+
+  const financingRows = GlobalDataStore.financing.map(f => `
+    <tr>
+      <td>${f.partner}</td><td>$${f.limit.toLocaleString()}</td>
+      <td>$${f.used.toLocaleString()}</td><td>${f.status}</td>
+    </tr>`).join('');
+
+  return `
+    <html>
+      <head>
+        <style>
+          body { font-family: Helvetica, Arial, sans-serif; padding: 32px; color: #14141a; }
+          h1 { color: #0891a8; margin-bottom: 2px; }
+          h2 { color: #14141a; font-size: 16px; margin-top: 4px; font-weight: 500; }
+          h3 { margin-top: 30px; margin-bottom: 8px; border-bottom: 2px solid #00E5FF; padding-bottom: 6px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+          th { text-align: left; background: #14141a; color: #fff; padding: 8px; font-size: 12px; }
+          td { padding: 8px; font-size: 12px; border-bottom: 1px solid #eee; }
+          .summary { display: flex; gap: 24px; margin-top: 16px; }
+          .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; }
+          .card .num { font-size: 20px; font-weight: 700; color: #0891a8; }
+          .card .label { font-size: 11px; color: #666; }
+          .footer { margin-top: 32px; font-size: 10px; color: #999; }
+        </style>
+      </head>
+      <body>
+        <h1>OGAMOTO Enterprise Report</h1>
+        <h2>${reportTitle}</h2>
+        <p style="color:#666; font-size: 12px;">Generated: ${generatedDate}</p>
+
+        <div class="summary">
+          <div class="card"><div class="num">$${stats.totalLeadValue.toLocaleString()}</div><div class="label">Total Lead Value</div></div>
+          <div class="card"><div class="num">${GlobalDataStore.leads.length}</div><div class="label">Total Leads</div></div>
+          <div class="card"><div class="num">${stats.totalUnits}</div><div class="label">Units In Transit</div></div>
+        </div>
+
+        <h3>Leads Pipeline</h3>
+        <table>
+          <tr><th>Name</th><th>Vehicle</th><th>Deposit</th><th>Date</th><th>Status</th></tr>
+          ${leadsRows}
+        </table>
+
+        <h3>Cargo & Shipments</h3>
+        <table>
+          <tr><th>Container</th><th>Vessel</th><th>Origin</th><th>Units</th><th>Status</th></tr>
+          ${shipmentRows}
+        </table>
+
+        <h3>Financing Partners</h3>
+        <table>
+          <tr><th>Partner</th><th>Limit</th><th>Used</th><th>Status</th></tr>
+          ${financingRows}
+        </table>
+
+        <div class="footer">OGAMOTO Enterprise System — Confidential Executive Document</div>
+      </body>
+    </html>
+  `;
+};
+
+const ReportsVaultScreen = ({ navigation }) => {
+  const [generatingId, setGeneratingId] = useState(null);
+
+  const generatePDFReport = async (report) => {
+    setGeneratingId(report.id);
+    try {
+      const html = buildReportHtml(report.title);
+      const { uri } = await Print.printToFileAsync({ html });
+
+      // Give the exported file a proper, human-readable name instead of the
+      // random temp name Print.printToFileAsync generates.
+      const properName = `OGAMOTO_${sanitizeFileName(report.title)}_${new Date().toISOString().split('T')[0]}.pdf`;
+      const destination = `${FileSystem.cacheDirectory}${properName}`;
+      await FileSystem.copyAsync({ from: uri, to: destination });
+
+      await Sharing.shareAsync(destination, { mimeType: 'application/pdf', dialogTitle: report.title, UTI: 'com.adobe.pdf' });
+    } catch (e) {
+      Alert.alert('Report Error', 'Could not generate or share the PDF document.');
+    } finally {
+      setGeneratingId(null);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.screenHeader}>
+        <IconButton onPress={() => navigation.openDrawer()} style={{ marginRight: 10 }}>
+          <Menu size={20} color={ACCENT} />
+        </IconButton>
+        <Text style={styles.screenHeaderTitle}>Reports Vault</Text>
+      </View>
+
+      <ScrollView contentContainerStyle={{ padding: 18 }}>
+        {GlobalDataStore.reports.map((item, i) => (
+          <FadeSlideIn key={item.id} delay={i * 70} style={styles.reportCard}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+              <FileText size={22} color={ACCENT} style={{ marginRight: 14 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{item.title}</Text>
+                <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>{item.date} · Full data export</Text>
+              </View>
+            </View>
+            <AnimatedPressable style={styles.downloadBtn} onPress={() => generatePDFReport(item)} disabled={generatingId === item.id}>
+              {generatingId === item.id ? <ActivityIndicator size="small" color="#09090b" /> : <Download size={15} color="#09090b" />}
+            </AnimatedPressable>
+          </FadeSlideIn>
+        ))}
+      </ScrollView>
+    </SafeAreaView>
+  );
+};
+
+// Give reports table entries onto the store so ReportsVaultScreen can read them
+GlobalDataStore.reports = [
+  { id: 'REP-001', title: 'Q2 Executive Lead Audit', date: '2026-07-15' },
+  { id: 'REP-002', title: 'Cargo & Logistics Manifest', date: '2026-07-28' },
+];
 
 // ==========================================
 // 5. CRM WEBVIEW PORTAL SCREEN
@@ -410,9 +809,9 @@ const CRMWebViewScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.screenHeader}>
-        <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 12 }}>
-          <Menu size={22} color="#00E5FF" />
-        </TouchableOpacity>
+        <IconButton onPress={() => navigation.openDrawer()} style={{ marginRight: 10 }}>
+          <Menu size={20} color={ACCENT} />
+        </IconButton>
         <Text style={styles.screenHeaderTitle}>CRM Web Portal</Text>
       </View>
       <WebView source={{ uri: targetUri }} style={{ flex: 1 }} startInLoadingState={true} />
@@ -427,14 +826,14 @@ function CustomDrawerContent(props) {
   return (
     <DrawerContentScrollView {...props} style={{ backgroundColor: '#09090b' }}>
       <View style={styles.drawerHeader}>
-        <Bot size={32} color="#00E5FF" />
+        <Bot size={28} color={ACCENT} />
         <Text style={styles.drawerBrandText}>OGAMOTO CRM</Text>
         <Text style={styles.drawerUserText}>John Doe (Admin)</Text>
       </View>
       <DrawerItemList {...props} />
       <DrawerItem
         label="Logout"
-        icon={({ color }) => <LogOut size={18} color="#ff4d4d" />}
+        icon={({ color }) => <LogOut size={17} color="#ff4d4d" />}
         labelStyle={{ color: '#ff4d4d', fontWeight: '600' }}
         onPress={() => props.navigation.reset({ index: 0, routes: [{ name: 'Login' }] })}
       />
@@ -451,10 +850,12 @@ function MainDrawerNavigator() {
       drawerContent={(props) => <CustomDrawerContent {...props} />}
       screenOptions={{
         headerShown: false,
-        drawerStyle: { backgroundColor: '#09090b', width: 280 },
-        drawerActiveTintColor: '#00E5FF',
+        drawerStyle: { backgroundColor: '#09090b', width: 270 },
+        drawerActiveTintColor: ACCENT,
         drawerInactiveTintColor: '#8a8a94',
         drawerLabelStyle: { fontWeight: '600', fontSize: 13 },
+        drawerType: 'slide',
+        overlayColor: 'rgba(0,0,0,0.55)',
       }}
     >
       <Drawer.Screen name="Dashboard" component={DashboardScreen} options={{ drawerIcon: ({ color }) => <LayoutDashboard size={18} color={color} /> }} />
@@ -478,7 +879,7 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#09090b' }}>
       <NavigationContainer>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade_from_bottom' }}>
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="MainDrawer" component={MainDrawerNavigator} />
         </Stack.Navigator>
@@ -488,71 +889,92 @@ export default function App() {
 }
 
 // ==========================================
-// STYLESHEET
+// STYLESHEET (trimmed sizing, bigger touch targets)
 // ==========================================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#09090b' },
-  screenHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#1a1a22', backgroundColor: '#09090b' },
-  screenHeaderTitle: { color: '#00E5FF', fontWeight: '800', fontSize: 16, letterSpacing: 0.5 },
+  screenHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#1a1a22', backgroundColor: '#09090b' },
+  screenHeaderTitle: { color: ACCENT, fontWeight: '800', fontSize: 15, letterSpacing: 0.4 },
+
+  iconButtonTarget: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
 
   loginContainer: { flex: 1, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
-  loginGlow: { position: 'absolute', width: width * 1.4, height: width * 1.4, borderRadius: width * 0.7, backgroundColor: '#00E5FF', opacity: 0.06, top: -width * 0.6 },
-  loginCard: { width: width * 0.85, padding: 28, backgroundColor: '#101014', borderRadius: 24, borderWidth: 1, borderColor: '#1a1a22' },
-  brandBadge: { alignSelf: 'center', width: 52, height: 52, borderRadius: 16, backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
-  loginBrandText: { fontSize: 30, fontWeight: '900', color: '#00E5FF', textAlign: 'center', letterSpacing: 6 },
-  loginTagline: { fontSize: 10, color: '#fff', opacity: 0.4, textAlign: 'center', letterSpacing: 2, marginBottom: 32, marginTop: 6 },
-  inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 14, marginBottom: 16, paddingHorizontal: 16 },
-  inputIcon: { marginRight: 12 },
-  authInputField: { flex: 1, height: 50, color: '#fff', fontSize: 14 },
-  loginSubmitButton: { backgroundColor: '#00E5FF', height: 52, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
+  loginGlow: { position: 'absolute', width: width * 1.4, height: width * 1.4, borderRadius: width * 0.7, backgroundColor: ACCENT, opacity: 0.06, top: -width * 0.6 },
+  loginCard: { width: width * 0.85, padding: 24, backgroundColor: '#101014', borderRadius: 22, borderWidth: 1, borderColor: '#1a1a22' },
+  brandBadge: { alignSelf: 'center', width: 46, height: 46, borderRadius: 14, backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  loginBrandText: { fontSize: 26, fontWeight: '900', color: ACCENT, textAlign: 'center', letterSpacing: 4 },
+  loginTagline: { fontSize: 10, color: '#fff', opacity: 0.4, textAlign: 'center', letterSpacing: 2, marginBottom: 26, marginTop: 6 },
+  inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 13, marginBottom: 14, paddingHorizontal: 14 },
+  inputIcon: { marginRight: 10 },
+  authInputField: { flex: 1, height: 46, color: '#fff', fontSize: 13 },
+  loginSubmitButton: { backgroundColor: ACCENT, height: 48, borderRadius: 13, justifyContent: 'center', alignItems: 'center', marginTop: 8 },
   loginSubmitButtonDisabled: { opacity: 0.7 },
-  loginButtonText: { color: '#09090b', fontWeight: '800', fontSize: 13, letterSpacing: 1 },
+  loginButtonText: { color: '#09090b', fontWeight: '800', fontSize: 12, letterSpacing: 1 },
 
-  drawerHeader: { padding: 20, borderBottomWidth: 1, borderBottomColor: '#1a1a22', marginBottom: 10 },
-  drawerBrandText: { color: '#00E5FF', fontWeight: '900', fontSize: 18, marginTop: 8 },
-  drawerUserText: { color: '#666', fontSize: 12, marginTop: 2 },
+  drawerHeader: { padding: 18, borderBottomWidth: 1, borderBottomColor: '#1a1a22', marginBottom: 8 },
+  drawerBrandText: { color: ACCENT, fontWeight: '900', fontSize: 17, marginTop: 8 },
+  drawerUserText: { color: '#666', fontSize: 11, marginTop: 2 },
 
-  refreshBtn: { padding: 8, backgroundColor: '#101014', borderRadius: 10, borderWidth: 1, borderColor: '#1a1a22' },
-  sectionHeading: { fontSize: 22, fontWeight: '800', color: '#fff' },
-  sectionEyebrow: { fontSize: 11, color: '#666', marginTop: 2, fontWeight: '600' },
-  sectionSubHeading: { fontSize: 12, fontWeight: '700', color: '#00E5FF', letterSpacing: 1 },
+  refreshBtn: { padding: 0, backgroundColor: '#101014', borderRadius: 12, borderWidth: 1, borderColor: '#1a1a22' },
+  sectionHeading: { fontSize: 19, fontWeight: '800', color: '#fff' },
+  sectionEyebrow: { fontSize: 10.5, color: '#666', marginTop: 2, fontWeight: '600' },
+  sectionSubHeading: { fontSize: 11.5, fontWeight: '700', color: ACCENT, letterSpacing: 1 },
+  filterNote: { color: '#666', fontSize: 10.5, marginBottom: 8, fontStyle: 'italic' },
 
   statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  dashboardMetricItem: { backgroundColor: '#101014', width: '48%', padding: 18, borderRadius: 18, borderWidth: 1, borderColor: '#1a1a22' },
-  activeItemCard: { borderColor: '#00E5FF' },
-  metricIconWrap: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
+  dashboardMetricItem: { backgroundColor: '#101014', width: '48%', padding: 15, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22' },
+  activeItemCard: { borderColor: ACCENT },
+  metricIconWrap: { width: 30, height: 30, borderRadius: 9, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
   metricIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.1)' },
-  dashboardMetricNumber: { fontSize: 22, fontWeight: '800', color: '#fff', marginTop: 12 },
-  dashboardMetricLabel: { color: '#777', fontSize: 11, marginTop: 4, fontWeight: '600' },
+  dashboardMetricNumber: { fontSize: 19, fontWeight: '800', color: '#fff', marginTop: 10 },
+  dashboardMetricLabel: { color: '#777', fontSize: 10.5, marginTop: 4, fontWeight: '600' },
 
   timeFilterContainer: { flexDirection: 'row', backgroundColor: '#101014', borderRadius: 8, padding: 2, borderWidth: 1, borderColor: '#1a1a22' },
-  timeFilterBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
-  timeFilterBadgeActive: { backgroundColor: '#00E5FF' },
+  timeFilterBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
+  timeFilterBadgeActive: { backgroundColor: ACCENT },
   timeFilterText: { color: '#666', fontSize: 10, fontWeight: '700' },
   timeFilterTextActive: { color: '#09090b' },
 
-  systemStatusLedgerAlertBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 16, borderRadius: 14, borderWidth: 1, borderColor: '#1a1a22', marginTop: 12 },
-  ledgerIconWrap: { width: 38, height: 38, borderRadius: 10, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  activeDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#00E5A0' },
+  systemStatusLedgerAlertBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 14, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginTop: 10 },
+  ledgerIconWrap: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
 
-  graphContainerCanvas: { backgroundColor: '#101014', padding: 20, borderRadius: 20, borderWidth: 1, borderColor: '#1a1a22', height: 210, justifyContent: 'flex-end' },
+  graphContainerCanvas: { backgroundColor: '#101014', padding: 18, borderRadius: 18, borderWidth: 1, borderColor: '#1a1a22', minHeight: 200, justifyContent: 'flex-end' },
   graphBarsAxisContainer: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'flex-end', width: '100%' },
   individualBarColumn: { alignItems: 'center' },
-  interactiveChartBarLine: { width: 34, backgroundColor: '#00E5FF', borderRadius: 6 },
-  barMarkerLabels: { color: '#666', fontSize: 10, marginTop: 10, fontWeight: '700' },
-  barMarkerValueText: { color: '#fff', fontSize: 10, marginBottom: 6, fontWeight: '600' },
+  interactiveChartBarLine: { width: 30, backgroundColor: ACCENT, borderRadius: 6 },
+  barMarkerLabels: { color: '#666', fontSize: 9.5, marginTop: 9, fontWeight: '700' },
+  barMarkerValueText: { color: '#fff', fontSize: 9.5, marginBottom: 6, fontWeight: '600' },
+  emptyStateText: { color: '#555', fontSize: 12, textAlign: 'center', paddingVertical: 30 },
 
-  msgBubble: { padding: 14, borderRadius: 18, marginVertical: 6, maxWidth: '85%', flexDirection: 'row', alignItems: 'flex-start' },
+  statusRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  statusChip: { backgroundColor: '#101014', width: '31%', paddingVertical: 14, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', alignItems: 'center' },
+  statusChipCount: { color: '#fff', fontWeight: '800', fontSize: 18 },
+  statusChipLabel: { color: '#777', fontSize: 10, marginTop: 3, fontWeight: '600' },
+
+  leadRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 13, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
+  leadName: { color: '#fff', fontWeight: '700', fontSize: 12.5 },
+  leadSub: { color: '#666', fontSize: 10.5, marginTop: 2 },
+  leadDeposit: { color: ACCENT, fontWeight: '700', fontSize: 12, marginRight: 10 },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
+  statusBadgeText: { color: '#fff', fontSize: 9.5, fontWeight: '700' },
+
+  shipmentSummaryRow: { flexDirection: 'row', marginBottom: 10 },
+  shipmentSummaryChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, marginRight: 10 },
+  shipmentSummaryText: { color: '#ccc', fontSize: 11, marginLeft: 6, fontWeight: '600' },
+  shipmentRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 13, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
+  shipmentStatusText: { color: ACCENT, fontSize: 10.5, fontWeight: '700' },
+
+  msgBubble: { padding: 13, borderRadius: 17, marginVertical: 5, maxWidth: '85%', flexDirection: 'row', alignItems: 'flex-start' },
   botBubble: { backgroundColor: '#101014', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#1a1a22' },
-  userBubble: { backgroundColor: '#00E5FF', alignSelf: 'flex-end' },
-  botAvatar: { width: 20, height: 20, borderRadius: 6, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center', marginRight: 8, marginTop: 1 },
-  msgText: { color: '#eaeaea', fontSize: 13, lineHeight: 19, flexShrink: 1 },
+  userBubble: { backgroundColor: ACCENT, alignSelf: 'flex-end' },
+  botAvatar: { width: 19, height: 19, borderRadius: 6, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center', marginRight: 8, marginTop: 1 },
+  msgText: { color: '#eaeaea', fontSize: 12.5, lineHeight: 18, flexShrink: 1 },
   userMsgText: { color: '#09090b', fontWeight: '600' },
 
-  inputContainer: { flexDirection: 'row', padding: 16, backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', alignItems: 'center' },
-  chatInput: { flex: 1, backgroundColor: '#101014', color: '#fff', paddingHorizontal: 18, height: 48, borderRadius: 24, marginRight: 12, borderWidth: 1, borderColor: '#1a1a22' },
-  sendButton: { backgroundColor: '#00E5FF', width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
+  inputContainer: { flexDirection: 'row', padding: 14, backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', alignItems: 'center' },
+  chatInput: { flex: 1, backgroundColor: '#101014', color: '#fff', paddingHorizontal: 16, height: 46, borderRadius: 23, marginRight: 10, borderWidth: 1, borderColor: '#1a1a22' },
+  sendButton: { backgroundColor: ACCENT, width: 42, height: 42, borderRadius: 21, justifyContent: 'center', alignItems: 'center' },
 
-  reportCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#101014', padding: 16, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 12 },
-  downloadBtn: { backgroundColor: '#00E5FF', padding: 10, borderRadius: 10 },
+  reportCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#101014', padding: 15, borderRadius: 15, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 11 },
+  downloadBtn: { backgroundColor: ACCENT, width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
 });
