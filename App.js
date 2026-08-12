@@ -33,8 +33,8 @@ import {
 // write and PDF report generation. See src/agents/Maya.js and
 // src/agents/Aether.js for the full implementation.
 // ==========================================
-import { MayaAgent } from './agents/Maya';
-import { AetherAgent, ReportsVault } from './agents/Aether';
+import { MayaAgent } from '@/src/agents/Maya';
+import { AetherAgent, ReportsVault } from '@/src/agents/Aether';
 
 // Smooth native layout transitions on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
