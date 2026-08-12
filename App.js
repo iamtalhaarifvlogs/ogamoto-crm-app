@@ -12,19 +12,29 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList, DrawerItem } from '@react-navigation/drawer';
 import { WebView } from 'react-native-webview';
 
-// Expo Modules for Notifications, PDF Generation & File System
+// Expo Modules — Notifications & Sharing. PDF generation now lives entirely
+// inside Aether.js (it owns expo-print + expo-file-system for reports), so
+// App.js only needs Sharing to hand a finished PDF to the OS share sheet.
 import * as Notifications from 'expo-notifications';
-import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
 
 // Vector Icons
 import {
   Bot, Send, LogIn, LayoutDashboard, Globe,
   User, Lock, TrendingUp, Container, Layers, LogOut, Eye, EyeOff,
   Menu, FileText, Download, Anchor, Truck, Sliders, Settings, Plus, RefreshCw, Bell,
-  CheckCircle2, Clock, PackageCheck,
+  CheckCircle2, Clock, PackageCheck, AlertTriangle,
 } from 'lucide-react-native';
+
+// ==========================================
+// MAYA & AETHER — the two agents that do all the real work now.
+// App.js no longer holds any mock data or business logic of its own: Maya
+// handles conversation + intent, Aether handles every live DynamoDB read/
+// write and PDF report generation. See src/agents/Maya.js and
+// src/agents/Aether.js for the full implementation.
+// ==========================================
+import { MayaAgent } from './agents/Maya';
+import { AetherAgent, ReportsVault } from './agents/Aether';
 
 // Smooth native layout transitions on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -45,151 +55,83 @@ const Stack = createNativeStackNavigator();
 const Drawer = createDrawerNavigator();
 const ACCENT = '#00E5FF';
 
-// ==========================================
-// CENTRALIZED REAL-TIME DATA STORE
-// ==========================================
-export const GlobalDataStore = {
-  leads: [
-    { id: '1', name: 'Jayson Tatum', vehicle: 'Honda Civic', deposit: 22000, date: '2026-07-28', status: 'Active' },
-    { id: '2', name: 'Samba Motors', vehicle: 'Toyota HiAce', deposit: 15000, date: '2026-07-29', status: 'Pipeline' },
-    { id: '3', name: 'Karachi Logistics', vehicle: 'Isuzu Truck', deposit: 45000, date: '2026-07-30', status: 'Closed' },
-  ],
-  shipments: [
-    { id: 'S1', container: 'CN-9082', vessel: 'Evergreen Alpha', origin: 'Port Qasim', units: 120, status: 'In Transit' },
-    { id: 'S2', container: 'CN-4410', vessel: 'Maersk Sealand', origin: 'KPT Terminal', units: 310, status: 'Customs' },
-  ],
-  financing: [
-    { id: 'F1', partner: 'Habib Bank Credit Line', limit: 500000, used: 182000, status: 'Active' },
-  ],
-  listeners: [],
-  subscribe(fn) {
-    this.listeners.push(fn);
-    return () => { this.listeners = this.listeners.filter(l => l !== fn); };
-  },
-  notify() {
-    this.listeners.forEach(fn => fn());
-  },
-  addLead(leadData) {
-    const newLead = {
-      id: Date.now().toString(),
-      name: leadData.name || 'Unassigned Lead',
-      vehicle: leadData.vehicle || 'Standard Unit',
-      deposit: Number(leadData.deposit) || 0,
-      date: new Date().toISOString().split('T')[0],
-      status: 'Active'
-    };
-    this.leads.unshift(newLead);
-    this.notify();
-    return newLead;
-  },
-  stats() {
-    const totalLeadValue = this.leads.reduce((s, l) => s + l.deposit, 0);
-    const totalUnits = this.shipments.reduce((s, sh) => s + sh.units, 0);
-    const byStatus = this.leads.reduce((acc, l) => {
-      acc[l.status] = (acc[l.status] || 0) + 1;
-      return acc;
-    }, {});
-    return { totalLeadValue, totalUnits, byStatus };
-  }
+// One shared, stateless Aether instance for direct reads (Dashboard, Reports
+// Vault) and one that lives inside Maya for conversational CRUD — both just
+// call the same live AWS endpoint, so sharing is safe and there's nothing to
+// keep in sync between them.
+const sharedAether = new AetherAgent();
+
+let __taskSeq = 0;
+const nextTaskId = () => `APP-${Date.now()}-${__taskSeq++}`;
+
+const toNum = (v) => {
+  const n = parseFloat(String(v ?? '').replace(/[^0-9.\-]/g, ''));
+  return isNaN(n) ? 0 : n;
+};
+
+const formatMoney = (v) => `$${toNum(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+const formatChartValue = (v) => (v >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(0)}`);
+
+// Stable, deterministic accent color for an arbitrary status string — since
+// real DynamoDB "stage" / "shipment_status" / "active_status" values aren't
+// a fixed enum, we can't hardcode a palette per literal label.
+const STATUS_PALETTE = [
+  { backgroundColor: 'rgba(0,229,160,0.12)', borderColor: '#00E5A0' },
+  { backgroundColor: 'rgba(0,229,255,0.12)', borderColor: ACCENT },
+  { backgroundColor: 'rgba(255,184,0,0.12)', borderColor: '#FFB800' },
+  { backgroundColor: 'rgba(255,90,90,0.12)', borderColor: '#FF5A5A' },
+  { backgroundColor: 'rgba(140,140,150,0.12)', borderColor: '#8a8a94' },
+];
+const statusColor = (status) => {
+  const s = String(status || 'Unspecified');
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return STATUS_PALETTE[hash % STATUS_PALETTE.length];
 };
 
 // ==========================================
-// MAYA & AETHER AI ENGINE (WITH RELIABLE PUSH NOTIFICATIONS)
+// DEVICE NOTIFICATION SCHEDULING
+// Maya decides WHAT to remind the user about (it returns a plain
+// { title, body, delaySeconds } request) — actually touching Expo's
+// notification APIs is App.js's job, since Maya.js is intentionally
+// platform-agnostic.
 // ==========================================
-class OperationalMayaEngine {
-  async ensureAndroidChannel() {
-    if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('default', {
-        name: 'Maya Alerts',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: ACCENT,
-      });
-    }
-  }
-
-  async requestNotificationPermission() {
-    const existing = await Notifications.getPermissionsAsync();
-    if (existing.status === 'granted') return true;
-    const { status } = await Notifications.requestPermissionsAsync();
-    return status === 'granted';
-  }
-
-  async scheduleNotification(seconds, title, body) {
-    const hasPermission = await this.requestNotificationPermission();
-    if (!hasPermission) {
-      return 'Notification permission is off. Enable alerts for OGAMOTO in your device Settings, then try again.';
-    }
-    await this.ensureAndroidChannel();
-
-    const safeSeconds = Math.max(1, Math.round(seconds));
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: title || 'OGAMOTO Alert',
-        body: body || 'Scheduled Maya action.',
-        sound: true,
-      },
-      trigger: {
-        seconds: safeSeconds,
-        repeats: false,
-        ...(Platform.OS === 'android' ? { channelId: 'default' } : {}),
-      },
+async function ensureAndroidChannel() {
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('default', {
+      name: 'Maya Alerts',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: ACCENT,
     });
-
-    const unit = safeSeconds === 1 ? 'second' : 'seconds';
-    return `Notification confirmed. I'll alert you in ${safeSeconds} ${unit}: "${body}"`;
   }
+}
 
-  async parseAndExecute(input) {
-    const lower = input.toLowerCase();
+async function requestNotificationPermission() {
+  const existing = await Notifications.getPermissionsAsync();
+  if (existing.status === 'granted') return true;
+  const { status } = await Notifications.requestPermissionsAsync();
+  return status === 'granted';
+}
 
-    // 1. Handle Reminders / Notifications
-    if (lower.includes('notify') || lower.includes('remind')) {
-      const secMatch = lower.match(/in\s+(\d+)\s*(?:seconds?|secs?|s)\b/);
-      const minMatch = lower.match(/in\s+(\d+)\s*(?:minutes?|mins?|m)\b/);
-      let delaySeconds = 60;
-      if (secMatch) delaySeconds = parseInt(secMatch[1], 10);
-      else if (minMatch) delaySeconds = parseInt(minMatch[1], 10) * 60;
-
-      let taskText = input.trim();
-      const toMatch = input.match(/to\s+(.+)/i);
-      if (toMatch && toMatch[1].trim()) taskText = toMatch[1].trim();
-
-      return await this.scheduleNotification(delaySeconds, 'Maya Reminder', taskText);
-    }
-
-    // 2. Handle Lead Display Queries
-    if (lower.includes('show lead') || lower.includes('list lead') || lower.includes('get lead')) {
-      const leadsList = GlobalDataStore.leads.map(l => `• ${l.name} - ${l.vehicle} ($${l.deposit.toLocaleString()}) [${l.status}]`).join('\n');
-      return `**Current Pipeline Leads:**\n\n${leadsList}`;
-    }
-
-    // 3. Handle Add Lead Directives (CUD)
-    if (lower.includes('add') && lower.includes('lead')) {
-      const depositMatch = input.match(/\$(\d+)/) || input.match(/of\s+(\d+)/);
-      const depositVal = depositMatch ? depositMatch[1] : 0;
-
-      let nameVal = 'New Lead';
-      if (lower.includes('add ')) {
-        const afterAdd = input.split(/add/i)[1] || '';
-        const asMatch = afterAdd.split(/as a|for/i)[0];
-        if (asMatch && asMatch.trim()) nameVal = asMatch.trim();
-      }
-
-      let vehicleVal = 'Vehicle Unit';
-      if (lower.includes('for ')) {
-        const afterFor = input.split(/for/i)[1] || '';
-        const withMatch = afterFor.split(/with|\$/i)[0];
-        if (withMatch && withMatch.trim()) vehicleVal = withMatch.trim();
-      }
-
-      const created = GlobalDataStore.addLead({ name: nameVal, vehicle: vehicleVal, deposit: depositVal });
-
-      return `**Aether Execution Update:**\nStatus: SUCCESS\nEntity: LEADS\nAction: CREATE\n\nRecorded Lead: ${created.name}\nVehicle: ${created.vehicle}\nDeposit: $${created.deposit.toLocaleString()}`;
-    }
-
-    return "Executive directive logged. Aether state synchronized. Try: \"show leads\", \"add lead John for Toyota Corolla $5000\", or \"remind me in 30 seconds to...\"";
+/** Returns true on success, or a user-facing error string on failure. */
+async function scheduleDeviceNotification(delaySeconds, title, body) {
+  const granted = await requestNotificationPermission();
+  if (!granted) {
+    return 'Notification permission is off. Enable alerts for OGAMOTO in your device Settings, then try again.';
   }
+  await ensureAndroidChannel();
+  const safeSeconds = Math.max(1, Math.round(delaySeconds || 60));
+  await Notifications.scheduleNotificationAsync({
+    content: { title: title || 'OGAMOTO Alert', body: body || 'Scheduled Maya action.', sound: true },
+    trigger: {
+      seconds: safeSeconds,
+      repeats: false,
+      ...(Platform.OS === 'android' ? { channelId: 'default' } : {}),
+    },
+  });
+  return true;
 }
 
 // ==========================================
@@ -300,6 +242,19 @@ const TypingDots = () => {
   );
 };
 
+// A small inline banner for non-fatal fetch errors, with a retry action.
+const ErrorBanner = ({ message, onRetry }) => (
+  <View style={styles.errorBanner}>
+    <AlertTriangle size={16} color="#FF5A5A" style={{ marginRight: 10 }} />
+    <Text style={styles.errorBannerText}>{message}</Text>
+    {onRetry && (
+      <AnimatedPressable onPress={onRetry} style={styles.errorBannerRetry}>
+        <Text style={styles.errorBannerRetryText}>Retry</Text>
+      </AnimatedPressable>
+    )}
+  </View>
+);
+
 // ==========================================
 // 1. LOGIN SCREEN
 // ==========================================
@@ -357,7 +312,7 @@ const LoginScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 2. DASHBOARD SCREEN WITH LIVE METRICS & WORKING FILTERS
+// 2. DASHBOARD SCREEN — now backed entirely by live Aether reads
 // ==========================================
 const FILTER_DAYS = { '7D': 7, '30D': 30, 'YTD': null };
 
@@ -365,48 +320,76 @@ const DashboardScreen = ({ navigation }) => {
   const [activeDomain, setActiveDomain] = useState('LEADS');
   const [timeFilter, setTimeFilter] = useState('30D');
   const [refreshing, setRefreshing] = useState(false);
-  const [tick, setTick] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // Re-derive data whenever the screen regains focus (e.g. after Maya adds a lead)
-  useFocusEffect(useCallback(() => {
-    setTick(t => t + 1);
-    const unsub = GlobalDataStore.subscribe(() => setTick(t => t + 1));
-    return unsub;
-  }, []));
+  const [leads, setLeads] = useState([]);
+  const [shipments, setShipments] = useState([]);
+  const [financing, setFinancing] = useState([]);
+
+  const loadData = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true); else setLoading(true);
+    setError(null);
+    try {
+      const [leadsRes, shipmentsRes, financingRes] = await Promise.all([
+        sharedAether.executeTask({ actionType: 'READ', entity: 'leads', payload: {}, taskId: nextTaskId() }),
+        sharedAether.executeTask({ actionType: 'READ', entity: 'shipments', payload: {}, taskId: nextTaskId() }),
+        sharedAether.executeTask({ actionType: 'READ', entity: 'financing', payload: {}, taskId: nextTaskId() }),
+      ]);
+
+      if (leadsRes.status === 'SUCCESS') setLeads(leadsRes.dataPayload || []);
+      if (shipmentsRes.status === 'SUCCESS') setShipments(shipmentsRes.dataPayload || []);
+      if (financingRes.status === 'SUCCESS') setFinancing(financingRes.dataPayload || []);
+
+      const anyFailed = [leadsRes, shipmentsRes, financingRes].some(r => r.status !== 'SUCCESS');
+      if (anyFailed) setError('Some live data failed to load. Pull to refresh to try again.');
+    } catch (e) {
+      setError('Could not reach the live system. Check your connection and pull to refresh.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  // Refetch every time this screen regains focus — e.g. right after Maya
+  // creates or updates a record in the chat console.
+  useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
 
   const filteredLeads = useMemo(() => {
     const now = new Date();
-    return GlobalDataStore.leads.filter(l => {
-      const d = new Date(l.date);
-      if (timeFilter === 'YTD') {
-        return d.getFullYear() === now.getFullYear();
-      }
+    return leads.filter(l => {
+      if (!l.createdAt) return true; // don't silently hide records with no timestamp
+      const d = new Date(l.createdAt);
+      if (isNaN(d.getTime())) return true;
+      if (timeFilter === 'YTD') return d.getFullYear() === now.getFullYear();
       const days = FILTER_DAYS[timeFilter];
       const diffDays = (now - d) / (1000 * 60 * 60 * 24);
       return diffDays <= days && diffDays >= -1;
     });
-  }, [timeFilter, tick]);
+  }, [leads, timeFilter]);
 
-  const totalLeadValuation = filteredLeads.reduce((sum, item) => sum + item.deposit, 0);
+  const totalLeadValuation = filteredLeads.reduce((sum, item) => sum + toNum(item.budget), 0);
+
   const statusBreakdown = filteredLeads.reduce((acc, l) => {
-    acc[l.status] = (acc[l.status] || 0) + 1;
+    const key = l.stage || 'Unspecified';
+    acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
-  const shipmentUnits = GlobalDataStore.shipments.reduce((s, sh) => s + sh.units, 0);
-  const inTransitCount = GlobalDataStore.shipments.filter(s => s.status === 'In Transit').length;
-  const customsCount = GlobalDataStore.shipments.filter(s => s.status === 'Customs').length;
+  const statusKeys = Object.keys(statusBreakdown).slice(0, 3);
+
+  const shipmentStatusBreakdown = shipments.reduce((acc, s) => {
+    const key = s.shipment_status || 'Unspecified';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const shipmentStatusKeys = Object.keys(shipmentStatusBreakdown).slice(0, 2);
 
   const chartData = activeDomain === 'LEADS'
-    ? filteredLeads.map(l => ({ label: l.name.split(' ')[0], value: l.deposit, max: 50000 }))
-    : GlobalDataStore.shipments.map(s => ({ label: s.container, value: s.units, max: 400 }));
+    ? filteredLeads.map(l => ({ key: l.lead_id, label: (l.name || 'Lead').split(' ')[0], value: toNum(l.budget) }))
+    : shipments.map(s => ({ key: s.shipment_id, label: s.shipment_number || (s.vessel_name || 'Ship').split(' ')[0], value: toNum(s.total_logistics_cost) }));
+  const chartMax = Math.max(1, ...chartData.map(d => d.value), 1);
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    setTimeout(() => {
-      setTick(t => t + 1);
-      setRefreshing(false);
-    }, 700);
-  };
+  const onRefresh = () => loadData(true);
 
   const changeFilter = (range) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -417,6 +400,15 @@ const DashboardScreen = ({ navigation }) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setActiveDomain(domain);
   };
+
+  if (loading && !refreshing) {
+    return (
+      <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={ACCENT} />
+        <Text style={{ color: '#666', fontSize: 12, marginTop: 12 }}>Pulling live data from Aether…</Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -441,13 +433,15 @@ const DashboardScreen = ({ navigation }) => {
           </IconButton>
         </View>
 
+        {error && <ErrorBanner message={error} onRetry={() => loadData()} />}
+
         {/* Dynamic Metric Cards */}
         <View style={styles.statsRow}>
           <AnimatedPressable style={[styles.dashboardMetricItem, activeDomain === 'LEADS' && styles.activeItemCard]} onPress={() => changeDomain('LEADS')}>
             <View style={[styles.metricIconWrap, activeDomain === 'LEADS' && styles.metricIconWrapActive]}>
               <TrendingUp size={17} color={activeDomain === 'LEADS' ? ACCENT : '#666'} />
             </View>
-            <Text style={styles.dashboardMetricNumber}>${totalLeadValuation.toLocaleString()}</Text>
+            <Text style={styles.dashboardMetricNumber}>{formatMoney(totalLeadValuation)}</Text>
             <Text style={styles.dashboardMetricLabel}>Leads Value ({timeFilter})</Text>
           </AnimatedPressable>
 
@@ -455,12 +449,12 @@ const DashboardScreen = ({ navigation }) => {
             <View style={[styles.metricIconWrap, activeDomain === 'SHIPMENTS' && styles.metricIconWrapActive]}>
               <Container size={17} color={activeDomain === 'SHIPMENTS' ? ACCENT : '#666'} />
             </View>
-            <Text style={styles.dashboardMetricNumber}>{shipmentUnits}</Text>
-            <Text style={styles.dashboardMetricLabel}>Units In Transit</Text>
+            <Text style={styles.dashboardMetricNumber}>{shipments.length}</Text>
+            <Text style={styles.dashboardMetricLabel}>Total Shipments</Text>
           </AnimatedPressable>
         </View>
 
-        {/* Time-Range Filter Bar — now actually filters the data above */}
+        {/* Time-Range Filter Bar */}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 22, marginBottom: 10 }}>
           <Text style={styles.sectionSubHeading}>Analytical Vector ({activeDomain})</Text>
           <View style={styles.timeFilterContainer}>
@@ -482,12 +476,10 @@ const DashboardScreen = ({ navigation }) => {
           ) : (
             <View style={styles.graphBarsAxisContainer}>
               {chartData.map((item, index) => {
-                const barHeight = Math.min(Math.max((item.value / item.max) * 150, 30), 160);
+                const barHeight = Math.min(Math.max((item.value / chartMax) * 150, 20), 160);
                 return (
-                  <View key={index} style={styles.individualBarColumn}>
-                    <Text style={styles.barMarkerValueText}>
-                      {activeDomain === 'LEADS' ? `$${(item.value / 1000).toFixed(0)}k` : item.value}
-                    </Text>
+                  <View key={item.key || index} style={styles.individualBarColumn}>
+                    <Text style={styles.barMarkerValueText}>{formatChartValue(item.value)}</Text>
                     <AnimatedChartBar targetHeight={barHeight} delay={index * 80} />
                     <Text style={styles.barMarkerLabels}>{item.label}</Text>
                   </View>
@@ -497,13 +489,15 @@ const DashboardScreen = ({ navigation }) => {
           )}
         </View>
 
-        {/* Pipeline Status Breakdown */}
+        {/* Pipeline Status Breakdown — dynamic, since real "stage" values aren't a fixed enum */}
         <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Pipeline Status ({timeFilter})</Text>
         <View style={styles.statusRow}>
-          {['Active', 'Pipeline', 'Closed'].map((s) => (
+          {statusKeys.length === 0 ? (
+            <Text style={styles.emptyStateText}>No leads recorded in this window.</Text>
+          ) : statusKeys.map((s) => (
             <View key={s} style={styles.statusChip}>
-              <Text style={styles.statusChipCount}>{statusBreakdown[s] || 0}</Text>
-              <Text style={styles.statusChipLabel}>{s}</Text>
+              <Text style={styles.statusChipCount}>{statusBreakdown[s]}</Text>
+              <Text style={styles.statusChipLabel} numberOfLines={1}>{s}</Text>
             </View>
           ))}
         </View>
@@ -513,14 +507,14 @@ const DashboardScreen = ({ navigation }) => {
         {filteredLeads.length === 0 ? (
           <Text style={styles.emptyStateText}>No leads recorded in this window.</Text>
         ) : filteredLeads.map((lead, i) => (
-          <FadeSlideIn key={lead.id} delay={i * 60} style={styles.leadRow}>
+          <FadeSlideIn key={lead.lead_id} delay={i * 60} style={styles.leadRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.leadName}>{lead.name}</Text>
-              <Text style={styles.leadSub}>{lead.vehicle} · {lead.date}</Text>
+              <Text style={styles.leadName}>{lead.name || 'Unnamed Lead'}</Text>
+              <Text style={styles.leadSub}>{lead.preferredVehicle || 'No vehicle set'} · {lead.createdAt ? new Date(lead.createdAt).toLocaleDateString() : '—'}</Text>
             </View>
-            <Text style={styles.leadDeposit}>${lead.deposit.toLocaleString()}</Text>
-            <View style={[styles.statusBadge, statusColor(lead.status)]}>
-              <Text style={styles.statusBadgeText}>{lead.status}</Text>
+            <Text style={styles.leadDeposit}>{formatMoney(lead.budget)}</Text>
+            <View style={[styles.statusBadge, statusColor(lead.stage)]}>
+              <Text style={styles.statusBadgeText}>{lead.stage || 'Unspecified'}</Text>
             </View>
           </FadeSlideIn>
         ))}
@@ -528,35 +522,37 @@ const DashboardScreen = ({ navigation }) => {
         {/* Shipments Snapshot */}
         <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Cargo & Logistics</Text>
         <View style={styles.shipmentSummaryRow}>
-          <View style={styles.shipmentSummaryChip}>
-            <Clock size={14} color={ACCENT} />
-            <Text style={styles.shipmentSummaryText}>{inTransitCount} In Transit</Text>
-          </View>
-          <View style={styles.shipmentSummaryChip}>
-            <PackageCheck size={14} color={ACCENT} />
-            <Text style={styles.shipmentSummaryText}>{customsCount} In Customs</Text>
-          </View>
+          {shipmentStatusKeys.length === 0 ? (
+            <Text style={styles.filterNote}>No shipments on file yet.</Text>
+          ) : shipmentStatusKeys.map((s) => (
+            <View key={s} style={styles.shipmentSummaryChip}>
+              <Clock size={14} color={ACCENT} />
+              <Text style={styles.shipmentSummaryText} numberOfLines={1}>{shipmentStatusBreakdown[s]} {s}</Text>
+            </View>
+          ))}
         </View>
-        {GlobalDataStore.shipments.map((s, i) => (
-          <FadeSlideIn key={s.id} delay={i * 60} style={styles.shipmentRow}>
+        {shipments.map((s, i) => (
+          <FadeSlideIn key={s.shipment_id} delay={i * 60} style={styles.shipmentRow}>
             <Container size={16} color="#8a8a94" style={{ marginRight: 10 }} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.leadName}>{s.container} · {s.vessel}</Text>
-              <Text style={styles.leadSub}>{s.origin} · {s.units} units</Text>
+              <Text style={styles.leadName}>{s.shipment_number || 'Shipment'} · {s.vessel_name || 'Unassigned vessel'}</Text>
+              <Text style={styles.leadSub}>{s.origin_location || '—'} → {s.destination_country || '—'}</Text>
             </View>
-            <Text style={styles.shipmentStatusText}>{s.status}</Text>
+            <Text style={styles.shipmentStatusText}>{s.shipment_status || 'Unspecified'}</Text>
           </FadeSlideIn>
         ))}
 
         {/* Partner Ledger */}
         <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Financing Partner Ledger</Text>
-        {GlobalDataStore.financing.map((f) => (
-          <View key={f.id} style={styles.systemStatusLedgerAlertBox}>
+        {financing.length === 0 ? (
+          <Text style={styles.emptyStateText}>No financing partners on file yet.</Text>
+        ) : financing.map((f) => (
+          <View key={f.financing_id} style={styles.systemStatusLedgerAlertBox}>
             <View style={styles.ledgerIconWrap}><Layers size={17} color={ACCENT} /></View>
             <View style={{ flex: 1 }}>
-              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{f.partner}</Text>
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{f.partner_name || 'Unnamed Partner'}</Text>
               <Text style={{ color: '#8a8a94', fontSize: 11, marginTop: 3 }}>
-                Limit: ${f.limit.toLocaleString()} · Used: ${f.used.toLocaleString()} · {f.status}
+                Limit: {formatMoney(f.max_loan_amount)} · Rate: {f.interest_rate ? `${f.interest_rate}%` : '—'} · {f.active_status || 'Unspecified'}
               </Text>
             </View>
             <PulsingDot />
@@ -567,22 +563,16 @@ const DashboardScreen = ({ navigation }) => {
   );
 };
 
-const statusColor = (status) => {
-  if (status === 'Active') return { backgroundColor: 'rgba(0,229,160,0.12)', borderColor: '#00E5A0' };
-  if (status === 'Pipeline') return { backgroundColor: 'rgba(0,229,255,0.12)', borderColor: ACCENT };
-  return { backgroundColor: 'rgba(140,140,150,0.12)', borderColor: '#8a8a94' };
-};
-
 // ==========================================
-// 3. MAYA AI CONSOLE SCREEN (FIXED: no longer gets stuck)
+// 3. MAYA AI CONSOLE SCREEN — now a real MayaAgent, not a local mock engine
 // ==========================================
 const MayaAgentConsoleScreen = ({ navigation }) => {
   const [messages, setMessages] = useState([
-    { id: 'seed-1', text: 'Greetings Executive. Maya & Aether core online. Direct me to process lead records, query manifests, or schedule real-time reminders.', isBot: true }
+    { id: 'seed-1', text: 'Greetings Executive. Maya & Aether core online. Direct me to process lead records, query manifests, schedule real-time reminders, or generate a report.', isBot: true }
   ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const mayaEngine = useRef(new OperationalMayaEngine()).current;
+  const maya = useRef(new MayaAgent()).current;
   const idCounter = useRef(1);
   const listRef = useRef(null);
 
@@ -601,13 +591,22 @@ const MayaAgentConsoleScreen = ({ navigation }) => {
 
     let responseText;
     try {
-      responseText = await mayaEngine.parseAndExecute(trimmed);
+      const result = await maya.handleUserDirective(trimmed);
+      responseText = result.advice;
+
+      // Maya only decides WHAT to remind the user about — App.js actually
+      // schedules it on-device and surfaces a permission error if needed.
+      if (result.notificationRequest) {
+        const { title, body, delaySeconds } = result.notificationRequest;
+        const outcome = await scheduleDeviceNotification(delaySeconds, title, body);
+        if (outcome !== true) responseText = outcome;
+      }
     } catch (err) {
-      responseText = 'Aether encountered an error processing that directive. Please try again.';
+      responseText = 'Aether hit a snag reaching the live system. Please try again in a moment.';
     }
 
     // Small delay purely for a natural typing feel — always resolves, never blocks future sends
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise(resolve => setTimeout(resolve, 450));
 
     setMessages(prev => [...prev, { id: nextId(), text: responseText, isBot: true }]);
     setIsTyping(false);
@@ -663,106 +662,44 @@ const MayaAgentConsoleScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 4. REPORTS VAULT SCREEN (fixed filenames + full data coverage)
+// 4. REPORTS VAULT SCREEN — reads live from Aether's ReportsVault registry
 // ==========================================
-const sanitizeFileName = (title) =>
-  title.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 60);
-
-const buildReportHtml = (reportTitle) => {
-  const stats = GlobalDataStore.stats();
-  const generatedDate = new Date().toLocaleDateString();
-
-  const leadsRows = GlobalDataStore.leads.map(l => `
-    <tr>
-      <td>${l.name}</td><td>${l.vehicle}</td><td>$${l.deposit.toLocaleString()}</td>
-      <td>${l.date}</td><td>${l.status}</td>
-    </tr>`).join('');
-
-  const shipmentRows = GlobalDataStore.shipments.map(s => `
-    <tr>
-      <td>${s.container}</td><td>${s.vessel}</td><td>${s.origin}</td>
-      <td>${s.units}</td><td>${s.status}</td>
-    </tr>`).join('');
-
-  const financingRows = GlobalDataStore.financing.map(f => `
-    <tr>
-      <td>${f.partner}</td><td>$${f.limit.toLocaleString()}</td>
-      <td>$${f.used.toLocaleString()}</td><td>${f.status}</td>
-    </tr>`).join('');
-
-  return `
-    <html>
-      <head>
-        <style>
-          body { font-family: Helvetica, Arial, sans-serif; padding: 32px; color: #14141a; }
-          h1 { color: #0891a8; margin-bottom: 2px; }
-          h2 { color: #14141a; font-size: 16px; margin-top: 4px; font-weight: 500; }
-          h3 { margin-top: 30px; margin-bottom: 8px; border-bottom: 2px solid #00E5FF; padding-bottom: 6px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-          th { text-align: left; background: #14141a; color: #fff; padding: 8px; font-size: 12px; }
-          td { padding: 8px; font-size: 12px; border-bottom: 1px solid #eee; }
-          .summary { display: flex; gap: 24px; margin-top: 16px; }
-          .card { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; }
-          .card .num { font-size: 20px; font-weight: 700; color: #0891a8; }
-          .card .label { font-size: 11px; color: #666; }
-          .footer { margin-top: 32px; font-size: 10px; color: #999; }
-        </style>
-      </head>
-      <body>
-        <h1>OGAMOTO Enterprise Report</h1>
-        <h2>${reportTitle}</h2>
-        <p style="color:#666; font-size: 12px;">Generated: ${generatedDate}</p>
-
-        <div class="summary">
-          <div class="card"><div class="num">$${stats.totalLeadValue.toLocaleString()}</div><div class="label">Total Lead Value</div></div>
-          <div class="card"><div class="num">${GlobalDataStore.leads.length}</div><div class="label">Total Leads</div></div>
-          <div class="card"><div class="num">${stats.totalUnits}</div><div class="label">Units In Transit</div></div>
-        </div>
-
-        <h3>Leads Pipeline</h3>
-        <table>
-          <tr><th>Name</th><th>Vehicle</th><th>Deposit</th><th>Date</th><th>Status</th></tr>
-          ${leadsRows}
-        </table>
-
-        <h3>Cargo & Shipments</h3>
-        <table>
-          <tr><th>Container</th><th>Vessel</th><th>Origin</th><th>Units</th><th>Status</th></tr>
-          ${shipmentRows}
-        </table>
-
-        <h3>Financing Partners</h3>
-        <table>
-          <tr><th>Partner</th><th>Limit</th><th>Used</th><th>Status</th></tr>
-          ${financingRows}
-        </table>
-
-        <div class="footer">OGAMOTO Enterprise System — Confidential Executive Document</div>
-      </body>
-    </html>
-  `;
-};
-
 const ReportsVaultScreen = ({ navigation }) => {
-  const [generatingId, setGeneratingId] = useState(null);
+  const [entries, setEntries] = useState(ReportsVault.list());
+  const [generating, setGenerating] = useState(false);
+  const [sharingId, setSharingId] = useState(null);
 
-  const generatePDFReport = async (report) => {
-    setGeneratingId(report.id);
+  useEffect(() => {
+    const unsubscribe = ReportsVault.subscribe((list) => setEntries([...list]));
+    return unsubscribe;
+  }, []);
+
+  const generateFullReport = async () => {
+    setGenerating(true);
     try {
-      const html = buildReportHtml(report.title);
-      const { uri } = await Print.printToFileAsync({ html });
-
-      // Give the exported file a proper, human-readable name instead of the
-      // random temp name Print.printToFileAsync generates.
-      const properName = `OGAMOTO_${sanitizeFileName(report.title)}_${new Date().toISOString().split('T')[0]}.pdf`;
-      const destination = `${FileSystem.cacheDirectory}${properName}`;
-      await FileSystem.copyAsync({ from: uri, to: destination });
-
-      await Sharing.shareAsync(destination, { mimeType: 'application/pdf', dialogTitle: report.title, UTI: 'com.adobe.pdf' });
+      const result = await sharedAether.executeTask({
+        actionType: 'GENERATE_PDF',
+        payload: { fullExport: true, title: `Full Data Export — ${new Date().toLocaleDateString()}` },
+        taskId: nextTaskId(),
+      });
+      if (result.status !== 'SUCCESS') {
+        Alert.alert('Report Error', result.errorMessage || 'Could not generate the report.');
+      }
     } catch (e) {
-      Alert.alert('Report Error', 'Could not generate or share the PDF document.');
+      Alert.alert('Report Error', 'Could not reach the live system to generate this report.');
     } finally {
-      setGeneratingId(null);
+      setGenerating(false);
+    }
+  };
+
+  const shareReport = async (entry) => {
+    setSharingId(entry.id);
+    try {
+      await Sharing.shareAsync(entry.filePath, { mimeType: 'application/pdf', dialogTitle: entry.title, UTI: 'com.adobe.pdf' });
+    } catch (e) {
+      Alert.alert('Share Error', 'Could not open the share sheet for this report.');
+    } finally {
+      setSharingId(null);
     }
   };
 
@@ -773,20 +710,28 @@ const ReportsVaultScreen = ({ navigation }) => {
           <Menu size={20} color={ACCENT} />
         </IconButton>
         <Text style={styles.screenHeaderTitle}>Reports Vault</Text>
+        <View style={{ flex: 1 }} />
+        <AnimatedPressable style={styles.generateReportBtn} onPress={generateFullReport} disabled={generating}>
+          {generating ? <ActivityIndicator size="small" color="#09090b" /> : <Plus size={16} color="#09090b" />}
+        </AnimatedPressable>
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 18 }}>
-        {GlobalDataStore.reports.map((item, i) => (
+        {entries.length === 0 ? (
+          <Text style={styles.emptyStateText}>No reports yet. Ask Maya to generate one in the chat console, or tap + above for a full export.</Text>
+        ) : entries.map((item, i) => (
           <FadeSlideIn key={item.id} delay={i * 70} style={styles.reportCard}>
             <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
               <FileText size={22} color={ACCENT} style={{ marginRight: 14 }} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{item.title}</Text>
-                <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>{item.date} · Full data export</Text>
+                <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>
+                  {new Date(item.generatedAt).toLocaleDateString()} · {item.recordCount} record(s)
+                </Text>
               </View>
             </View>
-            <AnimatedPressable style={styles.downloadBtn} onPress={() => generatePDFReport(item)} disabled={generatingId === item.id}>
-              {generatingId === item.id ? <ActivityIndicator size="small" color="#09090b" /> : <Download size={15} color="#09090b" />}
+            <AnimatedPressable style={styles.downloadBtn} onPress={() => shareReport(item)} disabled={sharingId === item.id}>
+              {sharingId === item.id ? <ActivityIndicator size="small" color="#09090b" /> : <Download size={15} color="#09090b" />}
             </AnimatedPressable>
           </FadeSlideIn>
         ))}
@@ -794,12 +739,6 @@ const ReportsVaultScreen = ({ navigation }) => {
     </SafeAreaView>
   );
 };
-
-// Give reports table entries onto the store so ReportsVaultScreen can read them
-GlobalDataStore.reports = [
-  { id: 'REP-001', title: 'Q2 Executive Lead Audit', date: '2026-07-15' },
-  { id: 'REP-002', title: 'Cargo & Logistics Manifest', date: '2026-07-28' },
-];
 
 // ==========================================
 // 5. CRM WEBVIEW PORTAL SCREEN
@@ -889,7 +828,7 @@ export default function App() {
 }
 
 // ==========================================
-// STYLESHEET (trimmed sizing, bigger touch targets)
+// STYLESHEET
 // ==========================================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#09090b' },
@@ -921,6 +860,11 @@ const styles = StyleSheet.create({
   sectionSubHeading: { fontSize: 11.5, fontWeight: '700', color: ACCENT, letterSpacing: 1 },
   filterNote: { color: '#666', fontSize: 10.5, marginBottom: 8, fontStyle: 'italic' },
 
+  errorBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,90,90,0.08)', borderWidth: 1, borderColor: 'rgba(255,90,90,0.35)', borderRadius: 12, padding: 12, marginBottom: 16 },
+  errorBannerText: { color: '#ffb3b3', fontSize: 11, flex: 1 },
+  errorBannerRetry: { backgroundColor: 'rgba(255,90,90,0.18)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, marginLeft: 8 },
+  errorBannerRetryText: { color: '#ff8080', fontSize: 10.5, fontWeight: '700' },
+
   statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
   dashboardMetricItem: { backgroundColor: '#101014', width: '48%', padding: 15, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22' },
   activeItemCard: { borderColor: ACCENT },
@@ -949,7 +893,7 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: 'row', justifyContent: 'space-between' },
   statusChip: { backgroundColor: '#101014', width: '31%', paddingVertical: 14, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', alignItems: 'center' },
   statusChipCount: { color: '#fff', fontWeight: '800', fontSize: 18 },
-  statusChipLabel: { color: '#777', fontSize: 10, marginTop: 3, fontWeight: '600' },
+  statusChipLabel: { color: '#777', fontSize: 10, marginTop: 3, fontWeight: '600', paddingHorizontal: 4 },
 
   leadRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 13, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
   leadName: { color: '#fff', fontWeight: '700', fontSize: 12.5 },
@@ -958,8 +902,8 @@ const styles = StyleSheet.create({
   statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
   statusBadgeText: { color: '#fff', fontSize: 9.5, fontWeight: '700' },
 
-  shipmentSummaryRow: { flexDirection: 'row', marginBottom: 10 },
-  shipmentSummaryChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, marginRight: 10 },
+  shipmentSummaryRow: { flexDirection: 'row', marginBottom: 10, flexWrap: 'wrap' },
+  shipmentSummaryChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, marginRight: 10, marginBottom: 6 },
   shipmentSummaryText: { color: '#ccc', fontSize: 11, marginLeft: 6, fontWeight: '600' },
   shipmentRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 13, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
   shipmentStatusText: { color: ACCENT, fontSize: 10.5, fontWeight: '700' },
@@ -977,4 +921,5 @@ const styles = StyleSheet.create({
 
   reportCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#101014', padding: 15, borderRadius: 15, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 11 },
   downloadBtn: { backgroundColor: ACCENT, width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  generateReportBtn: { backgroundColor: ACCENT, width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
 });
