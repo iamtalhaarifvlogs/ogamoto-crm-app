@@ -67,7 +67,7 @@ const BUILD_STAMP = 'build 2026-08-13.2';
 const sharedAether = new AetherAgent();
 
 let __taskSeq = 0;
-const nextTaskId = () => `APP-${Date.now()}-${__taskSeq++}`;
+const nextTaskId = () => `APP-\( {Date.now()}- \){__taskSeq++}`;
 
 const toNum = (v) => {
   const n = parseFloat(String(v ?? '').replace(/[^0-9.\-]/g, ''));
@@ -83,16 +83,16 @@ const formatCompactMoney = (v) => {
   const n = toNum(v);
   const abs = Math.abs(n);
   const sign = n < 0 ? '-' : '';
-  if (abs >= 1e12) return `${sign}$${(abs / 1e12).toFixed(1)}T`;
-  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(1)}B`;
-  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
-  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
-  return `${sign}$${abs.toFixed(0)}`;
+  if (abs >= 1e12) return `${sign}\[ {(abs / 1e12).toFixed(1)}T`;
+  if (abs >= 1e9) return `${sign} \]{(abs / 1e9).toFixed(1)}B`;
+  if (abs >= 1e6) return `${sign}\[ {(abs / 1e6).toFixed(1)}M`;
+  if (abs >= 1e3) return `${sign} \]{(abs / 1e3).toFixed(1)}K`;
+  return `${sign}\[ {abs.toFixed(0)}`;
 };
 
 // Full precision — reserved for the detail modal, where the user has
 // explicitly asked to see everything about one record.
-const formatFullMoney = (v) => `$${toNum(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const formatFullMoney = (v) => ` \]{toNum(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
 const formatDetailValue = (value, type) => {
   if (value === undefined || value === null || value === '') return '—';
@@ -493,6 +493,7 @@ const LoginScreen = ({ navigation }) => {
 const FILTER_DAYS = { '7D': 7, '30D': 30, 'YTD': null };
 
 const DashboardScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const [activeDomain, setActiveDomain] = useState('LEADS');
   const [timeFilter, setTimeFilter] = useState('30D');
   const [selectedStage, setSelectedStage] = useState(null);
@@ -612,7 +613,11 @@ const DashboardScreen = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
-        contentContainerStyle={{ padding: 18, paddingBottom: 36 }}
+        contentContainerStyle={{
+          paddingHorizontal: 18,
+          paddingBottom: 40,
+          paddingTop: Math.max(insets.top, 8) + 12,
+        }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCENT} colors={[ACCENT]} />}
       >
@@ -638,23 +643,41 @@ const DashboardScreen = ({ navigation }) => {
 
         {error && <ErrorBanner message={error} onRetry={() => loadData()} />}
 
-        {/* Dynamic Metric Cards — compact formatting keeps these a fixed, sane height */}
+        {/* Dynamic Metric Cards — fixed layout so labels never wrap mid-word */}
         <View style={styles.statsRow}>
-          <AnimatedPressable style={[styles.dashboardMetricItem, activeDomain === 'LEADS' && styles.activeItemCard]} onPress={() => changeDomain('LEADS')}>
-            <View style={[styles.metricIconWrap, activeDomain === 'LEADS' && styles.metricIconWrapActive]}>
-              <TrendingUp size={17} color={activeDomain === 'LEADS' ? ACCENT : '#666'} />
-            </View>
-            <Text style={styles.dashboardMetricNumber} numberOfLines={1} adjustsFontSizeToFit>{formatCompactMoney(totalLeadValuation)}</Text>
-            <Text style={styles.dashboardMetricLabel}>Leads Value ({timeFilter})</Text>
-          </AnimatedPressable>
+          <View style={styles.metricCardWrapper}>
+            <AnimatedPressable
+              style={[styles.dashboardMetricItem, activeDomain === 'LEADS' && styles.activeItemCard]}
+              onPress={() => changeDomain('LEADS')}
+            >
+              <View style={[styles.metricIconWrap, activeDomain === 'LEADS' && styles.metricIconWrapActive]}>
+                <TrendingUp size={17} color={activeDomain === 'LEADS' ? ACCENT : '#666'} />
+              </View>
+              <Text style={styles.dashboardMetricNumber} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                {formatCompactMoney(totalLeadValuation)}
+              </Text>
+              <Text style={styles.dashboardMetricLabel} numberOfLines={2}>
+                Leads Value ({timeFilter})
+              </Text>
+            </AnimatedPressable>
+          </View>
 
-          <AnimatedPressable style={[styles.dashboardMetricItem, activeDomain === 'SHIPMENTS' && styles.activeItemCard]} onPress={() => changeDomain('SHIPMENTS')}>
-            <View style={[styles.metricIconWrap, activeDomain === 'SHIPMENTS' && styles.metricIconWrapActive]}>
-              <Container size={17} color={activeDomain === 'SHIPMENTS' ? ACCENT : '#666'} />
-            </View>
-            <Text style={styles.dashboardMetricNumber} numberOfLines={1} adjustsFontSizeToFit>{shipments.length}</Text>
-            <Text style={styles.dashboardMetricLabel}>Total Shipments</Text>
-          </AnimatedPressable>
+          <View style={styles.metricCardWrapper}>
+            <AnimatedPressable
+              style={[styles.dashboardMetricItem, activeDomain === 'SHIPMENTS' && styles.activeItemCard]}
+              onPress={() => changeDomain('SHIPMENTS')}
+            >
+              <View style={[styles.metricIconWrap, activeDomain === 'SHIPMENTS' && styles.metricIconWrapActive]}>
+                <Container size={17} color={activeDomain === 'SHIPMENTS' ? ACCENT : '#666'} />
+              </View>
+              <Text style={styles.dashboardMetricNumber} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+                {shipments.length}
+              </Text>
+              <Text style={styles.dashboardMetricLabel} numberOfLines={2}>
+                Total Shipments
+              </Text>
+            </AnimatedPressable>
+          </View>
         </View>
 
         {/* Time-Range Filter Bar */}
@@ -704,7 +727,7 @@ const DashboardScreen = ({ navigation }) => {
               style={[styles.statusChip, selectedStage === s && styles.statusChipActive]}
             >
               <Text style={styles.statusChipCount}>{statusBreakdown[s]}</Text>
-              <Text style={styles.statusChipLabel} numberOfLines={1}>{s}</Text>
+              <Text style={styles.statusChipLabel} numberOfLines={2}>{s}</Text>
             </AnimatedPressable>
           ))}
         </View>
@@ -807,7 +830,7 @@ const MayaAgentConsoleScreen = ({ navigation }) => {
 
   const nextId = () => {
     idCounter.current += 1;
-    return `${Date.now()}-${idCounter.current}`;
+    return `\( {Date.now()}- \){idCounter.current}`;
   };
 
   const handleSend = async () => {
@@ -1205,7 +1228,14 @@ const TAB_META = {
 const CustomTabBar = ({ state, navigation }) => {
   const insets = useSafeAreaInsets();
   return (
-    <View style={[styles.tabBarContainer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+    <View style={[
+      styles.tabBarContainer,
+      {
+        paddingTop: 10,
+        paddingBottom: Math.max(insets.bottom, 12) + 4,
+        minHeight: 56 + Math.max(insets.bottom, 0),
+      },
+    ]}>
       {state.routes.map((route, index) => {
         const isFocused = state.index === index;
         const meta = TAB_META[route.name];
@@ -1219,7 +1249,7 @@ const CustomTabBar = ({ state, navigation }) => {
         return (
           <AnimatedPressable key={route.key} onPress={onPress} style={styles.tabBarButton}>
             <View style={[styles.tabIconWrap, isFocused && styles.tabIconWrapActive]}>
-              <Icon size={19} color={isFocused ? ACCENT : '#6b6b78'} />
+              <Icon size={20} color={isFocused ? ACCENT : '#6b6b78'} />
             </View>
             <Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{meta.label}</Text>
           </AnimatedPressable>
@@ -1408,13 +1438,52 @@ const styles = StyleSheet.create({
   errorBannerRetry: { backgroundColor: 'rgba(255,90,90,0.18)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, marginLeft: 8 },
   errorBannerRetryText: { color: '#ff8080', fontSize: 10.5, fontWeight: '700' },
 
-  statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  dashboardMetricItem: { backgroundColor: '#101014', width: '48%', height: 118, padding: 15, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'space-between', overflow: 'hidden' },
+  // ===== FIXED METRIC CARDS =====
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    gap: 12,
+  },
+  metricCardWrapper: {
+    flex: 1,
+  },
+  dashboardMetricItem: {
+    backgroundColor: '#101014',
+    minHeight: 132,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#1a1a22',
+    justifyContent: 'flex-start',
+    overflow: 'hidden',
+  },
   activeItemCard: { borderColor: ACCENT },
-  metricIconWrap: { width: 30, height: 30, borderRadius: 9, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
+  metricIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    backgroundColor: '#09090b',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
   metricIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.1)' },
-  dashboardMetricNumber: { fontSize: 20, fontWeight: '800', color: '#fff' },
-  dashboardMetricLabel: { color: '#777', fontSize: 10.5, fontWeight: '600' },
+  dashboardMetricNumber: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#fff',
+    marginBottom: 6,
+    width: '100%',
+  },
+  dashboardMetricLabel: {
+    color: '#777',
+    fontSize: 11,
+    fontWeight: '600',
+    lineHeight: 15,
+    width: '100%',
+  },
 
   timeFilterContainer: { flexDirection: 'row', backgroundColor: '#101014', borderRadius: 8, padding: 2, borderWidth: 1, borderColor: '#1a1a22' },
   timeFilterBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
@@ -1433,11 +1502,32 @@ const styles = StyleSheet.create({
   barMarkerValueText: { color: '#fff', fontSize: 9.5, marginBottom: 6, fontWeight: '600' },
   emptyStateText: { color: '#555', fontSize: 12, textAlign: 'center', paddingVertical: 30 },
 
+  // ===== IMPROVED PIPELINE STATUS CHIPS =====
   statusRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  statusChip: { backgroundColor: '#101014', width: '48%', paddingVertical: 14, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', alignItems: 'center', marginBottom: 10 },
+  statusChip: {
+    backgroundColor: '#101014',
+    width: '48%',
+    minHeight: 64,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: '#1a1a22',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
   statusChipActive: { borderColor: ACCENT, backgroundColor: 'rgba(0,229,255,0.08)' },
   statusChipCount: { color: '#fff', fontWeight: '800', fontSize: 18 },
-  statusChipLabel: { color: '#777', fontSize: 10, marginTop: 3, fontWeight: '600', paddingHorizontal: 4 },
+  statusChipLabel: {
+    color: '#777',
+    fontSize: 10,
+    marginTop: 3,
+    fontWeight: '600',
+    paddingHorizontal: 4,
+    textAlign: 'center',
+    lineHeight: 13,
+  },
 
   leadRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 13, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
   leadName: { color: '#fff', fontWeight: '700', fontSize: 12.5 },
@@ -1467,11 +1557,31 @@ const styles = StyleSheet.create({
   downloadBtn: { backgroundColor: ACCENT, width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
   generateReportBtn: { backgroundColor: ACCENT, width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
 
-  tabBarContainer: { flexDirection: 'row', backgroundColor: '#0c0c10', borderTopWidth: 1, borderTopColor: '#1a1a22', paddingTop: 8, paddingHorizontal: 10 },
-  tabBarButton: { flex: 1, alignItems: 'center', paddingVertical: 4, borderRadius: 14 },
-  tabIconWrap: { width: 36, height: 36, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 3 },
+  // ===== FIXED BOTTOM TAB BAR =====
+  tabBarContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#0c0c10',
+    borderTopWidth: 1,
+    borderTopColor: '#1a1a22',
+    paddingHorizontal: 10,
+  },
+  tabBarButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 4,
+    borderRadius: 14,
+  },
+  tabIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
   tabIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.12)' },
-  tabLabel: { fontSize: 10, fontWeight: '700', color: '#6b6b78' },
+  tabLabel: { fontSize: 10.5, fontWeight: '700', color: '#6b6b78' },
   tabLabelActive: { color: ACCENT },
 
   searchBarWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 12, marginHorizontal: 18, marginTop: 14, paddingHorizontal: 12, height: 42 },
