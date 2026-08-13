@@ -55,6 +55,11 @@ const Drawer = createDrawerNavigator();
 const Tab = createBottomTabNavigator();
 const ACCENT = '#00E5FF';
 const DANGER = '#FF5A5A';
+// Visible build marker — shown small in the drawer footer and on the login
+// screen. Bump this string any time App.js changes. If the number on your
+// device doesn't match the one in this file, you are NOT running current
+// code — no amount of code fixing will show up until you rebuild clean.
+const BUILD_STAMP = 'build 2026-08-13.2';
 
 // One shared, stateless Aether instance for direct reads (Dashboard, entity
 // screens, Reports Vault) and one that lives inside Maya for conversational
@@ -472,6 +477,7 @@ const LoginScreen = ({ navigation }) => {
             </AnimatedPressable>
           </FadeSlideIn>
         </FadeSlideIn>
+        <Text style={styles.buildStampText}>{BUILD_STAMP}</Text>
       </KeyboardAvoidingView>
 
       {isLoggingIn && <BrandLoadingOverlay label="Signing into OGAMOTO CRM…" />}
@@ -1292,6 +1298,7 @@ function CustomDrawerContent(props) {
         danger
         onPress={() => props.navigation.reset({ index: 0, routes: [{ name: 'Login' }] })}
       />
+      <Text style={styles.drawerBuildStamp}>{BUILD_STAMP}</Text>
     </DrawerContentScrollView>
   );
 }
@@ -1358,6 +1365,7 @@ const styles = StyleSheet.create({
   brandBadge: { alignSelf: 'center', width: 46, height: 46, borderRadius: 14, backgroundColor: '#09090b', borderWidth: 1, borderColor: 'rgba(0,229,255,0.35)', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
   loginBrandText: { fontSize: 26, fontWeight: '900', color: ACCENT, textAlign: 'center', letterSpacing: 4 },
   loginTagline: { fontSize: 9.5, color: '#fff', opacity: 0.4, textAlign: 'center', letterSpacing: 2, marginBottom: 26, marginTop: 6 },
+  buildStampText: { color: '#3a3a44', fontSize: 9.5, marginTop: 18, letterSpacing: 0.5 },
   inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 13, marginBottom: 14, paddingHorizontal: 14, overflow: 'hidden' },
   inputIcon: { marginRight: 10 },
   authInputField: { flex: 1, height: 46, color: '#fff', fontSize: 13 },
@@ -1385,6 +1393,7 @@ const styles = StyleSheet.create({
   drawerRowLabel: { flex: 1, color: '#d6d6dc', fontSize: 12.5, fontWeight: '600' },
   drawerRowLabelDanger: { color: DANGER },
   drawerDivider: { height: 1, backgroundColor: '#1a1a22', marginHorizontal: 20, marginBottom: 8, marginTop: 4 },
+  drawerBuildStamp: { color: '#3a3a44', fontSize: 9.5, textAlign: 'center', marginTop: 14, marginBottom: 6, letterSpacing: 0.5 },
 
   refreshBtn: { padding: 0, backgroundColor: '#101014', borderRadius: 12, borderWidth: 1, borderColor: '#1a1a22' },
   brandMicroLabel: { color: ACCENT, fontSize: 9.5, fontWeight: '800', letterSpacing: 1.6, marginBottom: 4 },
@@ -1400,7 +1409,7 @@ const styles = StyleSheet.create({
   errorBannerRetryText: { color: '#ff8080', fontSize: 10.5, fontWeight: '700' },
 
   statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  dashboardMetricItem: { backgroundColor: '#101014', width: '48%', height: 118, padding: 15, flex: 1, padding bottom: 80, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'space-between' },
+  dashboardMetricItem: { backgroundColor: '#101014', width: '48%', height: 118, padding: 15, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'space-between', overflow: 'hidden' },
   activeItemCard: { borderColor: ACCENT },
   metricIconWrap: { width: 30, height: 30, borderRadius: 9, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
   metricIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.1)' },
