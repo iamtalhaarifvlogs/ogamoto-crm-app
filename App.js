@@ -1,20 +1,19 @@
 import 'react-native-gesture-handler';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TextInput, TouchableOpacity,
+  View, Text, StyleSheet, TextInput, TouchableOpacity, Modal,
   Dimensions, FlatList, KeyboardAvoidingView, Platform, Alert, ScrollView,
   SafeAreaView, ActivityIndicator, Animated, Easing, LayoutAnimation, UIManager,
   RefreshControl,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavigationContainer, useFocusEffect, DrawerActions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator, DrawerContentScrollView } from '@react-navigation/drawer';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { WebView } from 'react-native-webview';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-// Expo Modules — Notifications & Sharing. PDF generation now lives entirely
+// Expo Modules — Notifications & Sharing. PDF generation lives entirely
 // inside Aether.js (it owns expo-print + expo-file-system for reports), so
 // App.js only needs Sharing to hand a finished PDF to the OS share sheet.
 import * as Notifications from 'expo-notifications';
@@ -24,14 +23,14 @@ import * as Sharing from 'expo-sharing';
 import {
   Bot, Send, LogIn, Home, User, Lock, TrendingUp, Container, Layers, LogOut,
   Eye, EyeOff, Menu, FileText, Download, Anchor, Truck, Sliders, Settings,
-  Plus, RefreshCw, Clock, AlertTriangle, ChevronRight,
+  Plus, RefreshCw, Clock, AlertTriangle, ChevronRight, Search, X,
 } from 'lucide-react-native';
 
 // ==========================================
-// MAYA & AETHER — the two agents that do all the real work now.
-// App.js no longer holds any mock data or business logic of its own: Maya
-// handles conversation + intent, Aether handles every live DynamoDB read/
-// write and PDF report generation.
+// MAYA & AETHER — the two agents that do all the real work.
+// App.js holds no mock data or business logic of its own: Maya handles
+// conversation + intent, Aether handles every live DynamoDB read/write and
+// PDF report generation.
 // ==========================================
 import { MayaAgent } from './src/agents/Maya';
 import { AetherAgent, ReportsVault } from './src/agents/Aether';
@@ -57,10 +56,9 @@ const Tab = createBottomTabNavigator();
 const ACCENT = '#00E5FF';
 const DANGER = '#FF5A5A';
 
-// One shared, stateless Aether instance for direct reads (Dashboard, Reports
-// Vault) and one that lives inside Maya for conversational CRUD — both just
-// call the same live AWS endpoint, so sharing is safe and there's nothing to
-// keep in sync between them.
+// One shared, stateless Aether instance for direct reads (Dashboard, entity
+// screens, Reports Vault) and one that lives inside Maya for conversational
+// CRUD — both just call the same live AWS endpoint, so sharing is safe.
 const sharedAether = new AetherAgent();
 
 let __taskSeq = 0;
@@ -71,9 +69,40 @@ const toNum = (v) => {
   return isNaN(n) ? 0 : n;
 };
 
-const formatMoney = (v) => `$${toNum(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+// Compact formatter (K/M/B/T) — used everywhere space is tight (cards,
+// chart labels, list rows). Large real-world numbers must NEVER be allowed
+// to render as a raw digit string here; that's what broke the dashboard
+// layout last time (a 10-digit number wrapped across 4 lines and stretched
+// its sibling card to match).
+const formatCompactMoney = (v) => {
+  const n = toNum(v);
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1e12) return `${sign}$${(abs / 1e12).toFixed(1)}T`;
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(1)}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
+  return `${sign}$${abs.toFixed(0)}`;
+};
 
-const formatChartValue = (v) => (v >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(0)}`);
+// Full precision — reserved for the detail modal, where the user has
+// explicitly asked to see everything about one record.
+const formatFullMoney = (v) => `$${toNum(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+const formatDetailValue = (value, type) => {
+  if (value === undefined || value === null || value === '') return '—';
+  if (type === 'money') return formatFullMoney(value);
+  if (type === 'percent') return `${value}%`;
+  if (type === 'date') {
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? String(value) : d.toLocaleString();
+  }
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value);
+};
+
+const buildDetailFields = (record, config) =>
+  config.detailFields.map(([label, key, type]) => [label, formatDetailValue(record[key], type)]);
 
 // Stable, deterministic accent color for an arbitrary status string — since
 // real DynamoDB "stage" / "shipment_status" / "active_status" values aren't
@@ -140,8 +169,7 @@ async function scheduleDeviceNotification(delaySeconds, title, body) {
 // REUSABLE ANIMATED PRIMITIVES
 // Every touchable surface in the app routes through AnimatedPressable, so
 // the "light leak" press effect (a soft accent-colored flash that blooms in
-// on press and fades back out) is automatically consistent everywhere —
-// buttons, cards, chips, drawer rows, tab bar items, all of it.
+// on press and fades back out) is automatically consistent everywhere.
 // ==========================================
 const AnimatedPressable = ({ onPress, style, children, disabled, hitSlop, leakColor = ACCENT }) => {
   const scale = useRef(new Animated.Value(1)).current;
@@ -299,10 +327,41 @@ const ScreenHeader = ({ navigation, title, right }) => (
   </View>
 );
 
+// A bottom-sheet style modal for "view more details" on any record —
+// used by the Dashboard and every entity list screen alike, so tapping a
+// lead, shipment, financing partner, or logistics record always behaves
+// the same way anywhere in the app.
+const DetailModal = ({ visible, onClose, title, subtitle, icon: Icon, fields = [] }) => (
+  <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <View style={styles.modalBackdrop}>
+      <TouchableOpacity activeOpacity={1} style={StyleSheet.absoluteFill} onPress={onClose} />
+      <View style={styles.modalSheet}>
+        <View style={styles.modalHandle} />
+        <View style={styles.modalHeaderRow}>
+          {Icon && <View style={styles.modalIconWrap}><Icon size={18} color={ACCENT} /></View>}
+          <View style={{ flex: 1 }}>
+            <Text style={styles.modalTitle} numberOfLines={1}>{title || 'Record Detail'}</Text>
+            {!!subtitle && <Text style={styles.modalSubtitle} numberOfLines={1}>{subtitle}</Text>}
+          </View>
+          <IconButton onPress={onClose} style={styles.modalCloseBtn}>
+            <X size={16} color="#999" />
+          </IconButton>
+        </View>
+        <ScrollView style={{ maxHeight: 440 }} contentContainerStyle={{ paddingBottom: 14 }}>
+          {fields.map(([label, value]) => (
+            <View key={label} style={styles.modalFieldRow}>
+              <Text style={styles.modalFieldLabel}>{label}</Text>
+              <Text style={styles.modalFieldValue} numberOfLines={3}>{value}</Text>
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    </View>
+  </Modal>
+);
+
 // ==========================================
 // BRANDED FULL-SCREEN LOADING TRANSITION
-// Shown briefly between Login and the main app, and reusable anywhere a
-// "the system is doing something real" beat is useful.
 // ==========================================
 const BrandLoadingOverlay = ({ label = 'Initializing OGAMOTO CRM…' }) => {
   const pulse = useRef(new Animated.Value(0.92)).current;
@@ -343,8 +402,7 @@ const BrandLoadingOverlay = ({ label = 'Initializing OGAMOTO CRM…' }) => {
 };
 
 // ==========================================
-// 1. LOGIN SCREEN — visually enhanced with layered glow, staggered field
-// entrance, and a branded loading transition into the app.
+// 1. LOGIN SCREEN
 // ==========================================
 const LoginScreen = ({ navigation }) => {
   const [username, setUsername] = useState('john@gmail.com');
@@ -422,16 +480,20 @@ const LoginScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 2. DASHBOARD SCREEN — live Aether data, opens with a real greeting
+// 2. DASHBOARD SCREEN — live Aether data, greeting, and now genuinely
+// interactive: status chips filter the list below, and every row opens the
+// shared detail modal.
 // ==========================================
 const FILTER_DAYS = { '7D': 7, '30D': 30, 'YTD': null };
 
 const DashboardScreen = ({ navigation }) => {
   const [activeDomain, setActiveDomain] = useState('LEADS');
   const [timeFilter, setTimeFilter] = useState('30D');
+  const [selectedStage, setSelectedStage] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [detail, setDetail] = useState(null);
 
   const [leads, setLeads] = useState([]);
   const [shipments, setShipments] = useState([]);
@@ -461,14 +523,12 @@ const DashboardScreen = ({ navigation }) => {
     }
   }, []);
 
-  // Refetch every time this screen regains focus — e.g. right after Maya
-  // creates or updates a record in the chat console.
   useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
 
   const filteredLeads = useMemo(() => {
     const now = new Date();
     return leads.filter(l => {
-      if (!l.createdAt) return true; // don't silently hide records with no timestamp
+      if (!l.createdAt) return true;
       const d = new Date(l.createdAt);
       if (isNaN(d.getTime())) return true;
       if (timeFilter === 'YTD') return d.getFullYear() === now.getFullYear();
@@ -485,7 +545,12 @@ const DashboardScreen = ({ navigation }) => {
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
-  const statusKeys = Object.keys(statusBreakdown).slice(0, 3);
+  const statusKeys = Object.keys(statusBreakdown).slice(0, 4);
+
+  // Tapping a Pipeline Status chip filters the Recent Leads list below.
+  const visibleLeads = selectedStage
+    ? filteredLeads.filter(l => (l.stage || 'Unspecified') === selectedStage)
+    : filteredLeads;
 
   const shipmentStatusBreakdown = shipments.reduce((acc, s) => {
     const key = s.shipment_status || 'Unspecified';
@@ -510,6 +575,24 @@ const DashboardScreen = ({ navigation }) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setActiveDomain(domain);
   };
+
+  const toggleStage = (s) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setSelectedStage(prev => (prev === s ? null : s));
+  };
+
+  const openLeadDetail = (lead) => setDetail({
+    title: lead.name || 'Unnamed Lead', subtitle: lead.stage || 'Unspecified', icon: TrendingUp,
+    fields: buildDetailFields(lead, ENTITY_UI.leads),
+  });
+  const openShipmentDetail = (s) => setDetail({
+    title: s.shipment_number || 'Shipment', subtitle: s.shipment_status || 'Unspecified', icon: Container,
+    fields: buildDetailFields(s, ENTITY_UI.shipments),
+  });
+  const openFinancingDetail = (f) => setDetail({
+    title: f.partner_name || 'Financing Partner', subtitle: f.active_status || 'Unspecified', icon: Layers,
+    fields: buildDetailFields(f, ENTITY_UI.financing),
+  });
 
   if (loading && !refreshing) {
     return (
@@ -549,13 +632,13 @@ const DashboardScreen = ({ navigation }) => {
 
         {error && <ErrorBanner message={error} onRetry={() => loadData()} />}
 
-        {/* Dynamic Metric Cards */}
+        {/* Dynamic Metric Cards — compact formatting keeps these a fixed, sane height */}
         <View style={styles.statsRow}>
           <AnimatedPressable style={[styles.dashboardMetricItem, activeDomain === 'LEADS' && styles.activeItemCard]} onPress={() => changeDomain('LEADS')}>
             <View style={[styles.metricIconWrap, activeDomain === 'LEADS' && styles.metricIconWrapActive]}>
               <TrendingUp size={17} color={activeDomain === 'LEADS' ? ACCENT : '#666'} />
             </View>
-            <Text style={styles.dashboardMetricNumber}>{formatMoney(totalLeadValuation)}</Text>
+            <Text style={styles.dashboardMetricNumber} numberOfLines={1} adjustsFontSizeToFit>{formatCompactMoney(totalLeadValuation)}</Text>
             <Text style={styles.dashboardMetricLabel}>Leads Value ({timeFilter})</Text>
           </AnimatedPressable>
 
@@ -563,7 +646,7 @@ const DashboardScreen = ({ navigation }) => {
             <View style={[styles.metricIconWrap, activeDomain === 'SHIPMENTS' && styles.metricIconWrapActive]}>
               <Container size={17} color={activeDomain === 'SHIPMENTS' ? ACCENT : '#666'} />
             </View>
-            <Text style={styles.dashboardMetricNumber}>{shipments.length}</Text>
+            <Text style={styles.dashboardMetricNumber} numberOfLines={1} adjustsFontSizeToFit>{shipments.length}</Text>
             <Text style={styles.dashboardMetricLabel}>Total Shipments</Text>
           </AnimatedPressable>
         </View>
@@ -593,9 +676,9 @@ const DashboardScreen = ({ navigation }) => {
                 const barHeight = Math.min(Math.max((item.value / chartMax) * 150, 20), 160);
                 return (
                   <View key={item.key || index} style={styles.individualBarColumn}>
-                    <Text style={styles.barMarkerValueText}>{formatChartValue(item.value)}</Text>
+                    <Text style={styles.barMarkerValueText}>{formatCompactMoney(item.value)}</Text>
                     <AnimatedChartBar targetHeight={barHeight} delay={index * 80} />
-                    <Text style={styles.barMarkerLabels}>{item.label}</Text>
+                    <Text style={styles.barMarkerLabels} numberOfLines={1}>{item.label}</Text>
                   </View>
                 );
               })}
@@ -603,33 +686,47 @@ const DashboardScreen = ({ navigation }) => {
           )}
         </View>
 
-        {/* Pipeline Status Breakdown — dynamic, since real "stage" values aren't a fixed enum */}
-        <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Pipeline Status ({timeFilter})</Text>
+        {/* Pipeline Status Breakdown — tap a chip to filter Recent Leads below */}
+        <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Pipeline Status ({timeFilter}) · Tap to filter</Text>
         <View style={styles.statusRow}>
           {statusKeys.length === 0 ? (
             <Text style={styles.emptyStateText}>No leads recorded in this window.</Text>
           ) : statusKeys.map((s) => (
-            <View key={s} style={styles.statusChip}>
+            <AnimatedPressable
+              key={s}
+              onPress={() => toggleStage(s)}
+              style={[styles.statusChip, selectedStage === s && styles.statusChipActive]}
+            >
               <Text style={styles.statusChipCount}>{statusBreakdown[s]}</Text>
               <Text style={styles.statusChipLabel} numberOfLines={1}>{s}</Text>
-            </View>
+            </AnimatedPressable>
           ))}
         </View>
 
-        {/* Recent Leads List */}
-        <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Recent Leads</Text>
-        {filteredLeads.length === 0 ? (
-          <Text style={styles.emptyStateText}>No leads recorded in this window.</Text>
-        ) : filteredLeads.map((lead, i) => (
-          <FadeSlideIn key={lead.lead_id} delay={i * 60} style={styles.leadRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.leadName}>{lead.name || 'Unnamed Lead'}</Text>
-              <Text style={styles.leadSub}>{lead.preferredVehicle || 'No vehicle set'} · {lead.createdAt ? new Date(lead.createdAt).toLocaleDateString() : '—'}</Text>
-            </View>
-            <Text style={styles.leadDeposit}>{formatMoney(lead.budget)}</Text>
-            <View style={[styles.statusBadge, statusColor(lead.stage)]}>
-              <Text style={styles.statusBadgeText}>{lead.stage || 'Unspecified'}</Text>
-            </View>
+        {/* Recent Leads List — tap a row for full detail */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 22, marginBottom: 10 }}>
+          <Text style={styles.sectionSubHeading}>Recent Leads{selectedStage ? ` · ${selectedStage}` : ''}</Text>
+          {selectedStage && (
+            <AnimatedPressable onPress={() => setSelectedStage(null)}>
+              <Text style={styles.clearFilterText}>Clear</Text>
+            </AnimatedPressable>
+          )}
+        </View>
+        {visibleLeads.length === 0 ? (
+          <Text style={styles.emptyStateText}>No leads match this view.</Text>
+        ) : visibleLeads.map((lead, i) => (
+          <FadeSlideIn key={lead.lead_id} delay={Math.min(i, 8) * 50} style={styles.leadRow}>
+            <TouchableOpacity activeOpacity={0.8} style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={() => openLeadDetail(lead)}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.leadName}>{lead.name || 'Unnamed Lead'}</Text>
+                <Text style={styles.leadSub}>{lead.preferredVehicle || 'No vehicle set'} · {lead.createdAt ? new Date(lead.createdAt).toLocaleDateString() : '—'}</Text>
+              </View>
+              <Text style={styles.leadDeposit}>{formatCompactMoney(lead.budget)}</Text>
+              <View style={[styles.statusBadge, statusColor(lead.stage)]}>
+                <Text style={styles.statusBadgeText} numberOfLines={1}>{lead.stage || 'Unspecified'}</Text>
+              </View>
+              <ChevronRight size={15} color="#3a3a44" style={{ marginLeft: 6 }} />
+            </TouchableOpacity>
           </FadeSlideIn>
         ))}
 
@@ -646,13 +743,16 @@ const DashboardScreen = ({ navigation }) => {
           ))}
         </View>
         {shipments.map((s, i) => (
-          <FadeSlideIn key={s.shipment_id} delay={i * 60} style={styles.shipmentRow}>
-            <Container size={16} color="#8a8a94" style={{ marginRight: 10 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.leadName}>{s.shipment_number || 'Shipment'} · {s.vessel_name || 'Unassigned vessel'}</Text>
-              <Text style={styles.leadSub}>{s.origin_location || '—'} → {s.destination_country || '—'}</Text>
-            </View>
-            <Text style={styles.shipmentStatusText}>{s.shipment_status || 'Unspecified'}</Text>
+          <FadeSlideIn key={s.shipment_id} delay={Math.min(i, 8) * 50} style={styles.shipmentRow}>
+            <TouchableOpacity activeOpacity={0.8} style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={() => openShipmentDetail(s)}>
+              <Container size={16} color="#8a8a94" style={{ marginRight: 10 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.leadName}>{s.shipment_number || 'Shipment'} · {s.vessel_name || 'Unassigned vessel'}</Text>
+                <Text style={styles.leadSub}>{s.origin_location || '—'} → {s.destination_country || '—'}</Text>
+              </View>
+              <Text style={styles.shipmentStatusText}>{s.shipment_status || 'Unspecified'}</Text>
+              <ChevronRight size={15} color="#3a3a44" style={{ marginLeft: 6 }} />
+            </TouchableOpacity>
           </FadeSlideIn>
         ))}
 
@@ -661,24 +761,33 @@ const DashboardScreen = ({ navigation }) => {
         {financing.length === 0 ? (
           <Text style={styles.emptyStateText}>No financing partners on file yet.</Text>
         ) : financing.map((f) => (
-          <View key={f.financing_id} style={styles.systemStatusLedgerAlertBox}>
+          <TouchableOpacity key={f.financing_id} activeOpacity={0.8} style={styles.systemStatusLedgerAlertBox} onPress={() => openFinancingDetail(f)}>
             <View style={styles.ledgerIconWrap}><Layers size={17} color={ACCENT} /></View>
             <View style={{ flex: 1 }}>
-              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{f.partner_name || 'Unnamed Partner'}</Text>
-              <Text style={{ color: '#8a8a94', fontSize: 11, marginTop: 3 }}>
-                Limit: {formatMoney(f.max_loan_amount)} · Rate: {f.interest_rate ? `${f.interest_rate}%` : '—'} · {f.active_status || 'Unspecified'}
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }} numberOfLines={1}>{f.partner_name || 'Unnamed Partner'}</Text>
+              <Text style={{ color: '#8a8a94', fontSize: 11, marginTop: 3 }} numberOfLines={1}>
+                Limit: {formatCompactMoney(f.max_loan_amount)} · Rate: {f.interest_rate ? `${f.interest_rate}%` : '—'} · {f.active_status || 'Unspecified'}
               </Text>
             </View>
             <PulsingDot />
-          </View>
+          </TouchableOpacity>
         ))}
       </ScrollView>
+
+      <DetailModal
+        visible={!!detail}
+        onClose={() => setDetail(null)}
+        title={detail?.title}
+        subtitle={detail?.subtitle}
+        icon={detail?.icon}
+        fields={detail?.fields || []}
+      />
     </SafeAreaView>
   );
 };
 
 // ==========================================
-// 3. MAYA AI CONSOLE SCREEN — a real MayaAgent, not a local mock engine
+// 3. MAYA AI CONSOLE SCREEN
 // ==========================================
 const MayaAgentConsoleScreen = ({ navigation }) => {
   const [messages, setMessages] = useState([
@@ -708,8 +817,6 @@ const MayaAgentConsoleScreen = ({ navigation }) => {
       const result = await maya.handleUserDirective(trimmed);
       responseText = result.advice;
 
-      // Maya only decides WHAT to remind the user about — App.js actually
-      // schedules it on-device and surfaces a permission error if needed.
       if (result.notificationRequest) {
         const { title, body, delaySeconds } = result.notificationRequest;
         const outcome = await scheduleDeviceNotification(delaySeconds, title, body);
@@ -719,7 +826,6 @@ const MayaAgentConsoleScreen = ({ navigation }) => {
       responseText = 'Aether hit a snag reaching the live system. Please try again in a moment.';
     }
 
-    // Small delay purely for a natural typing feel — always resolves, never blocks future sends
     await new Promise(resolve => setTimeout(resolve, 450));
 
     setMessages(prev => [...prev, { id: nextId(), text: responseText, isBot: true }]);
@@ -771,7 +877,7 @@ const MayaAgentConsoleScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 4. REPORTS VAULT SCREEN — reads live from Aether's ReportsVault registry
+// 4. REPORTS VAULT SCREEN
 // ==========================================
 const ReportsVaultScreen = ({ navigation }) => {
   const [entries, setEntries] = useState(ReportsVault.list());
@@ -832,7 +938,7 @@ const ReportsVaultScreen = ({ navigation }) => {
             <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
               <FileText size={22} color={ACCENT} style={{ marginRight: 14 }} />
               <View style={{ flex: 1 }}>
-                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{item.title}</Text>
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }} numberOfLines={2}>{item.title}</Text>
                 <Text style={{ color: '#666', fontSize: 11, marginTop: 2 }}>
                   {new Date(item.generatedAt).toLocaleDateString()} · {item.recordCount} record(s)
                 </Text>
@@ -849,21 +955,240 @@ const ReportsVaultScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 5. CRM WEBVIEW PORTAL SCREEN — used for every "everything else" drawer item
+// ENTITY UI CONFIG — drives every native list/detail screen below. Each
+// entry describes how to display and search one Aether entity; App.js needs
+// this display metadata regardless (Dashboard already hardcodes similar
+// mappings), so it's kept here rather than duplicated from Aether's schema.
 // ==========================================
-const CRMWebViewScreen = ({ navigation, route }) => {
-  const targetUri = route.params?.uri || 'https://pap-crm.vercel.app/';
+const ENTITY_UI = {
+  leads: {
+    title: 'Leads Pipeline', icon: TrendingUp,
+    idField: 'lead_id', titleField: 'name', statusField: 'stage', amountField: 'budget',
+    subtitleFields: ['preferredVehicle', 'location'],
+    searchFields: ['name', 'email', 'phone', 'location', 'preferredVehicle'],
+    detailFields: [
+      ['Name', 'name'], ['Stage', 'stage'], ['Budget', 'budget', 'money'], ['Down Payment', 'downPayment', 'money'],
+      ['Assigned Rep', 'assignedRep'], ['Credit Status', 'creditStatus'], ['Preferred Vehicle', 'preferredVehicle'],
+      ['Location', 'location'], ['Email', 'email'], ['Phone', 'phone'], ['Timeline', 'timeline'],
+      ['Created', 'createdAt', 'date'], ['Last Activity', 'lastActivity', 'date'],
+    ],
+  },
+  shipments: {
+    title: 'Shipments', icon: Container,
+    idField: 'shipment_id', titleField: 'shipment_number', statusField: 'shipment_status', amountField: 'total_logistics_cost',
+    subtitleFields: ['vessel_name', 'destination_country'],
+    searchFields: ['shipment_number', 'vessel_name', 'origin_location', 'destination_country', 'shipping_line'],
+    detailFields: [
+      ['Shipment #', 'shipment_number'], ['Status', 'shipment_status'], ['Vessel', 'vessel_name'], ['Shipping Line', 'shipping_line'],
+      ['Origin', 'origin_location'], ['Destination', 'destination_country'], ['Port Used', 'port_used'], ['Actual Port', 'actual_port_used'],
+      ['Departure', 'departure_date', 'date'], ['Arrival', 'arrival_date', 'date'], ['Est. Transit (days)', 'estimated_transit_time'],
+      ['Ocean Freight', 'ocean_freight_cost', 'money'], ['Inland Transport', 'inland_transport_cost', 'money'], ['Total Cost', 'total_logistics_cost', 'money'],
+      ['Vehicle ID', 'vehicle_id'], ['Linked Lead', 'lead_id'],
+    ],
+  },
+  financing: {
+    title: 'Financing Partners', icon: Layers,
+    idField: 'financing_id', titleField: 'partner_name', statusField: 'active_status', amountField: 'max_loan_amount',
+    subtitleFields: ['partner_type', 'contact_email'],
+    searchFields: ['partner_name', 'partner_type', 'contact_email'],
+    detailFields: [
+      ['Partner', 'partner_name'], ['Status', 'active_status'], ['Type', 'partner_type'], ['Max Loan Amount', 'max_loan_amount', 'money'],
+      ['Interest Rate', 'interest_rate', 'percent'], ['Loan Term (months)', 'loan_term_months'], ['Processing Fee', 'processing_fee', 'money'],
+      ['Min Credit Score', 'min_credit_score'], ['Approval Time (days)', 'approval_time_days'], ['Supported Countries', 'supported_countries'],
+      ['Contact Email', 'contact_email'], ['Notes', 'notes'],
+    ],
+  },
+  logistics: {
+    title: 'Logistics', icon: Truck,
+    idField: 'logistics_id', titleField: 'tracking_number', statusField: 'logistics_status', amountField: 'total_logistics_cost',
+    subtitleFields: ['shipment_id', 'vehicle_id'],
+    searchFields: ['tracking_number', 'shipment_id'],
+    detailFields: [
+      ['Tracking #', 'tracking_number'], ['Status', 'logistics_status'], ['Shipment ID', 'shipment_id'], ['Lead ID', 'lead_id'], ['Vehicle ID', 'vehicle_id'],
+      ['Ocean Freight', 'ocean_freight_cost', 'money'], ['Inland Transport', 'inland_transport_cost', 'money'], ['Insurance', 'insurance_cost', 'money'],
+      ['Clearance Cost', 'clearance_cost', 'money'], ['Other Fees', 'other_fees', 'money'], ['Total Cost', 'total_logistics_cost', 'money'],
+      ['Est. Transit (days)', 'estimated_transit_time'], ['Actual Transit (days)', 'actual_transit_time'], ['Last Updated', 'last_updated', 'date'],
+    ],
+  },
+  ports: {
+    title: 'Ports', icon: Anchor,
+    idField: 'port_id', titleField: 'port_name', statusField: 'active_status', amountField: null,
+    subtitleFields: ['city', 'country'],
+    searchFields: ['port_name', 'port_code', 'city', 'country'],
+    detailFields: [
+      ['Port Name', 'port_name'], ['Status', 'active_status'], ['Port Code', 'port_code'], ['City', 'city'], ['State', 'state'], ['Country', 'country'],
+      ['Shipping Partner', 'shipping_partner'], ['Container Supported', 'container_supported'], ['RoRo Supported', 'roro_supported'],
+      ['Supported Destinations', 'supported_destination_countries'],
+    ],
+  },
+};
+
+// ==========================================
+// 5. GENERIC ENTITY LIST SCREEN — powers Leads Pipeline, Shipments,
+// Financing Partners, Logistics, and Ports. Live Aether data, a search box,
+// dynamic status filter chips, pull-to-refresh, and tap-to-detail — every
+// drawer entity screen behaves identically because they're the same
+// component with different config.
+// ==========================================
+const EntityListScreen = ({ navigation, entityKey, config }) => {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState(null);
+  const [detail, setDetail] = useState(null);
+
+  const load = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true); else setLoading(true);
+    setError(null);
+    try {
+      const res = await sharedAether.executeTask({ actionType: 'READ', entity: entityKey, payload: {}, taskId: nextTaskId() });
+      if (res.status === 'SUCCESS') setItems(res.dataPayload || []);
+      else setError(res.errorMessage || 'Could not load live data.');
+    } catch (e) {
+      setError('Could not reach the live system. Pull to refresh to try again.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [entityKey]);
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const statusBreakdown = items.reduce((acc, it) => {
+    const key = it[config.statusField] || 'Unspecified';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const statusKeys = Object.keys(statusBreakdown);
+
+  const filtered = items.filter((it) => {
+    if (statusFilter && (it[config.statusField] || 'Unspecified') !== statusFilter) return false;
+    if (!search.trim()) return true;
+    const needle = search.trim().toLowerCase();
+    return config.searchFields.some((f) => String(it[f] || '').toLowerCase().includes(needle));
+  });
+
+  const openDetail = (item) => setDetail({
+    title: item[config.titleField] || config.title,
+    subtitle: item[config.statusField] || 'Unspecified',
+    icon: config.icon,
+    fields: buildDetailFields(item, config),
+  });
+
+  const onRefresh = () => load(true);
+  const Icon = config.icon;
+
   return (
     <SafeAreaView style={styles.container}>
-      <ScreenHeader navigation={navigation} title={route.name} />
-      <WebView source={{ uri: targetUri }} style={{ flex: 1 }} startInLoadingState={true} />
+      <ScreenHeader navigation={navigation} title={config.title} />
+
+      <View style={styles.searchBarWrap}>
+        <Search size={15} color="#666" style={{ marginRight: 8 }} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder={`Search ${config.title.toLowerCase()}...`}
+          placeholderTextColor="#4a4a55"
+          value={search}
+          onChangeText={setSearch}
+        />
+        {search.length > 0 && (
+          <IconButton onPress={() => setSearch('')} style={{ width: 30, height: 30 }}>
+            <X size={14} color="#666" />
+          </IconButton>
+        )}
+      </View>
+
+      {statusKeys.length > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterChipRow}>
+          <AnimatedPressable onPress={() => setStatusFilter(null)} style={[styles.filterChip, !statusFilter && styles.filterChipActive]}>
+            <Text style={[styles.filterChipText, !statusFilter && styles.filterChipTextActive]}>All ({items.length})</Text>
+          </AnimatedPressable>
+          {statusKeys.map((s) => (
+            <AnimatedPressable key={s} onPress={() => setStatusFilter(statusFilter === s ? null : s)} style={[styles.filterChip, statusFilter === s && styles.filterChipActive]}>
+              <Text style={[styles.filterChipText, statusFilter === s && styles.filterChipTextActive]} numberOfLines={1}>{s} ({statusBreakdown[s]})</Text>
+            </AnimatedPressable>
+          ))}
+        </ScrollView>
+      )}
+
+      {loading && !refreshing ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color={ACCENT} />
+        </View>
+      ) : (
+        <ScrollView
+          contentContainerStyle={{ padding: 18, paddingTop: 12 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCENT} colors={[ACCENT]} />}
+        >
+          {error && <ErrorBanner message={error} onRetry={() => load()} />}
+          {filtered.length === 0 ? (
+            <Text style={styles.emptyStateText}>No {config.title.toLowerCase()} match this view.</Text>
+          ) : filtered.map((item, i) => (
+            <FadeSlideIn key={item[config.idField] || i} delay={Math.min(i, 10) * 40} style={styles.entityRow}>
+              <TouchableOpacity activeOpacity={0.8} style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={() => openDetail(item)}>
+                <View style={styles.entityRowIconWrap}><Icon size={16} color={ACCENT} /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.leadName} numberOfLines={1}>{item[config.titleField] || config.title}</Text>
+                  <Text style={styles.leadSub} numberOfLines={1}>
+                    {config.subtitleFields.map((f) => item[f]).filter(Boolean).join(' · ') || '—'}
+                  </Text>
+                </View>
+                {config.amountField && <Text style={styles.leadDeposit}>{formatCompactMoney(item[config.amountField])}</Text>}
+                <View style={[styles.statusBadge, statusColor(item[config.statusField])]}>
+                  <Text style={styles.statusBadgeText} numberOfLines={1}>{item[config.statusField] || 'Unspecified'}</Text>
+                </View>
+                <ChevronRight size={15} color="#3a3a44" style={{ marginLeft: 6 }} />
+              </TouchableOpacity>
+            </FadeSlideIn>
+          ))}
+        </ScrollView>
+      )}
+
+      <DetailModal
+        visible={!!detail}
+        onClose={() => setDetail(null)}
+        title={detail?.title}
+        subtitle={detail?.subtitle}
+        icon={detail?.icon}
+        fields={detail?.fields || []}
+      />
     </SafeAreaView>
   );
 };
 
+const LeadsPipelineScreen = (props) => <EntityListScreen {...props} entityKey="leads" config={ENTITY_UI.leads} />;
+const ShipmentsScreen = (props) => <EntityListScreen {...props} entityKey="shipments" config={ENTITY_UI.shipments} />;
+const FinancingScreen = (props) => <EntityListScreen {...props} entityKey="financing" config={ENTITY_UI.financing} />;
+const LogisticsScreen = (props) => <EntityListScreen {...props} entityKey="logistics" config={ENTITY_UI.logistics} />;
+const PortsScreen = (props) => <EntityListScreen {...props} entityKey="ports" config={ENTITY_UI.ports} />;
+
 // ==========================================
-// BOTTOM TAB BAR — Home / Maya / Reports, custom-built so it gets the same
-// light-leak press effect as everything else in the app.
+// PLACEHOLDER SCREEN — for drawer entries with no live data backing yet
+// (Workflow Console, Settings). Native and on-brand — no external website.
+// ==========================================
+const PlaceholderScreen = ({ navigation, title, description, icon: Icon }) => (
+  <SafeAreaView style={styles.container}>
+    <ScreenHeader navigation={navigation} title={title} />
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 34 }}>
+      <View style={styles.placeholderIconWrap}><Icon size={26} color={ACCENT} /></View>
+      <Text style={styles.placeholderTitle}>{title}</Text>
+      <Text style={styles.placeholderDesc}>{description}</Text>
+    </View>
+  </SafeAreaView>
+);
+const WorkflowConsoleScreen = (props) => (
+  <PlaceholderScreen {...props} title="Workflow Console" icon={Sliders}
+    description="Custom automation workflows are coming soon. In the meantime, ask Maya — she already handles record CRUD, reminders, and report generation directly." />
+);
+const SettingsScreen = (props) => (
+  <PlaceholderScreen {...props} title="Settings" icon={Settings}
+    description="Account and system preferences are coming soon." />
+);
+
+// ==========================================
+// BOTTOM TAB BAR — Home / Maya / Reports
 // ==========================================
 const TAB_META = {
   Home: { label: 'Home', icon: Home },
@@ -912,18 +1237,17 @@ function MainTabs() {
 }
 
 // ==========================================
-// CUSTOM DRAWER MENU CONTENT
-// Everything that isn't one of the three bottom tabs lives here, grouped
-// into clearly labeled, alphabetically sorted sections with consistent
-// icon/label alignment.
+// CUSTOM DRAWER MENU CONTENT — everything that isn't a bottom tab, grouped
+// into alphabetically sorted sections with consistent icon/label alignment.
+// Every item here is a real native Aether-backed screen — no external site.
 // ==========================================
 const OPERATIONS_ITEMS = [
-  { label: 'Financing Partners', uri: 'https://pap-crm.vercel.app/financing', icon: Layers },
-  { label: 'Leads Pipeline', uri: 'https://pap-crm.vercel.app/leads', icon: TrendingUp },
-  { label: 'Logistics', uri: 'https://pap-crm.vercel.app/logistics', icon: Truck },
-  { label: 'Ports', uri: 'https://pap-crm.vercel.app/ports', icon: Anchor },
-  { label: 'Shipments', uri: 'https://pap-crm.vercel.app/shipments', icon: Container },
-  { label: 'Workflow Console', uri: 'https://pap-crm.vercel.app/workflow', icon: Sliders },
+  { label: 'Financing Partners', component: FinancingScreen, icon: Layers },
+  { label: 'Leads Pipeline', component: LeadsPipelineScreen, icon: TrendingUp },
+  { label: 'Logistics', component: LogisticsScreen, icon: Truck },
+  { label: 'Ports', component: PortsScreen, icon: Anchor },
+  { label: 'Shipments', component: ShipmentsScreen, icon: Container },
+  { label: 'Workflow Console', component: WorkflowConsoleScreen, icon: Sliders },
 ].sort((a, b) => a.label.localeCompare(b.label));
 
 const DrawerRow = ({ icon: Icon, label, onPress, danger }) => (
@@ -937,9 +1261,7 @@ const DrawerRow = ({ icon: Icon, label, onPress, danger }) => (
 );
 
 function CustomDrawerContent(props) {
-  const goTo = (name, params) => {
-    props.navigation.navigate(name, params);
-  };
+  const goTo = (name) => props.navigation.navigate(name);
 
   return (
     <DrawerContentScrollView {...props} style={{ backgroundColor: '#09090b' }} contentContainerStyle={{ flexGrow: 1, paddingTop: 0 }}>
@@ -994,9 +1316,9 @@ function MainDrawerNavigator() {
     >
       <Drawer.Screen name="MainTabs" component={MainTabs} />
       {OPERATIONS_ITEMS.map((item) => (
-        <Drawer.Screen key={item.label} name={item.label} component={CRMWebViewScreen} initialParams={{ uri: item.uri }} />
+        <Drawer.Screen key={item.label} name={item.label} component={item.component} />
       ))}
-      <Drawer.Screen name="Settings" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/settings' }} />
+      <Drawer.Screen name="Settings" component={SettingsScreen} />
     </Drawer.Navigator>
   );
 }
@@ -1006,14 +1328,16 @@ function MainDrawerNavigator() {
 // ==========================================
 export default function App() {
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#09090b' }}>
-      <NavigationContainer>
-        <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
-          <Stack.Screen name="Login" component={LoginScreen} />
-          <Stack.Screen name="MainDrawer" component={MainDrawerNavigator} />
-        </Stack.Navigator>
-      </NavigationContainer>
-    </GestureHandlerRootView>
+    <SafeAreaProvider>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#09090b' }}>
+        <NavigationContainer>
+          <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="MainDrawer" component={MainDrawerNavigator} />
+          </Stack.Navigator>
+        </NavigationContainer>
+      </GestureHandlerRootView>
+    </SafeAreaProvider>
   );
 }
 
@@ -1066,10 +1390,9 @@ const styles = StyleSheet.create({
   brandMicroLabel: { color: ACCENT, fontSize: 9.5, fontWeight: '800', letterSpacing: 1.6, marginBottom: 4 },
   greetingText: { fontSize: 19, fontWeight: '800', color: '#fff' },
   liveSubText: { fontSize: 10.5, color: '#777', fontWeight: '600' },
-  sectionHeading: { fontSize: 19, fontWeight: '800', color: '#fff' },
-  sectionEyebrow: { fontSize: 10.5, color: '#666', marginTop: 2, fontWeight: '600' },
   sectionSubHeading: { fontSize: 11.5, fontWeight: '700', color: ACCENT, letterSpacing: 1 },
   filterNote: { color: '#666', fontSize: 10.5, marginBottom: 8, fontStyle: 'italic' },
+  clearFilterText: { color: ACCENT, fontSize: 11, fontWeight: '700' },
 
   errorBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,90,90,0.08)', borderWidth: 1, borderColor: 'rgba(255,90,90,0.35)', borderRadius: 12, padding: 12, marginBottom: 16 },
   errorBannerText: { color: '#ffb3b3', fontSize: 11, flex: 1 },
@@ -1077,12 +1400,12 @@ const styles = StyleSheet.create({
   errorBannerRetryText: { color: '#ff8080', fontSize: 10.5, fontWeight: '700' },
 
   statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  dashboardMetricItem: { backgroundColor: '#101014', width: '48%', padding: 15, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22' },
+  dashboardMetricItem: { backgroundColor: '#101014', width: '48%', height: 118, padding: 15, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'space-between' },
   activeItemCard: { borderColor: ACCENT },
   metricIconWrap: { width: 30, height: 30, borderRadius: 9, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
   metricIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.1)' },
-  dashboardMetricNumber: { fontSize: 19, fontWeight: '800', color: '#fff', marginTop: 10 },
-  dashboardMetricLabel: { color: '#777', fontSize: 10.5, marginTop: 4, fontWeight: '600' },
+  dashboardMetricNumber: { fontSize: 20, fontWeight: '800', color: '#fff' },
+  dashboardMetricLabel: { color: '#777', fontSize: 10.5, fontWeight: '600' },
 
   timeFilterContainer: { flexDirection: 'row', backgroundColor: '#101014', borderRadius: 8, padding: 2, borderWidth: 1, borderColor: '#1a1a22' },
   timeFilterBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
@@ -1095,14 +1418,15 @@ const styles = StyleSheet.create({
 
   graphContainerCanvas: { backgroundColor: '#101014', padding: 18, borderRadius: 18, borderWidth: 1, borderColor: '#1a1a22', minHeight: 200, justifyContent: 'flex-end' },
   graphBarsAxisContainer: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'flex-end', width: '100%' },
-  individualBarColumn: { alignItems: 'center' },
-  interactiveChartBarLine: { width: 30, backgroundColor: ACCENT, borderRadius: 6 },
+  individualBarColumn: { alignItems: 'center', maxWidth: 64 },
+  interactiveChartBarLine: { width: 28, backgroundColor: ACCENT, borderRadius: 6 },
   barMarkerLabels: { color: '#666', fontSize: 9.5, marginTop: 9, fontWeight: '700' },
   barMarkerValueText: { color: '#fff', fontSize: 9.5, marginBottom: 6, fontWeight: '600' },
   emptyStateText: { color: '#555', fontSize: 12, textAlign: 'center', paddingVertical: 30 },
 
-  statusRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  statusChip: { backgroundColor: '#101014', width: '31%', paddingVertical: 14, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', alignItems: 'center' },
+  statusRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
+  statusChip: { backgroundColor: '#101014', width: '48%', paddingVertical: 14, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', alignItems: 'center', marginBottom: 10 },
+  statusChipActive: { borderColor: ACCENT, backgroundColor: 'rgba(0,229,255,0.08)' },
   statusChipCount: { color: '#fff', fontWeight: '800', fontSize: 18 },
   statusChipLabel: { color: '#777', fontSize: 10, marginTop: 3, fontWeight: '600', paddingHorizontal: 4 },
 
@@ -1110,7 +1434,7 @@ const styles = StyleSheet.create({
   leadName: { color: '#fff', fontWeight: '700', fontSize: 12.5 },
   leadSub: { color: '#666', fontSize: 10.5, marginTop: 2 },
   leadDeposit: { color: ACCENT, fontWeight: '700', fontSize: 12, marginRight: 10 },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, maxWidth: 100 },
   statusBadgeText: { color: '#fff', fontSize: 9.5, fontWeight: '700' },
 
   shipmentSummaryRow: { flexDirection: 'row', marginBottom: 10, flexWrap: 'wrap' },
@@ -1140,4 +1464,30 @@ const styles = StyleSheet.create({
   tabIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.12)' },
   tabLabel: { fontSize: 10, fontWeight: '700', color: '#6b6b78' },
   tabLabelActive: { color: ACCENT },
+
+  searchBarWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 12, marginHorizontal: 18, marginTop: 14, paddingHorizontal: 12, height: 42 },
+  searchInput: { flex: 1, color: '#fff', fontSize: 12.5, height: '100%' },
+  filterChipRow: { paddingHorizontal: 18, paddingTop: 12, paddingBottom: 2, gap: 8 },
+  filterChip: { backgroundColor: '#101014', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 20, paddingHorizontal: 13, paddingVertical: 7, marginRight: 8 },
+  filterChipActive: { backgroundColor: ACCENT, borderColor: ACCENT },
+  filterChipText: { color: '#999', fontSize: 11, fontWeight: '700' },
+  filterChipTextActive: { color: '#09090b' },
+  entityRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 13, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
+  entityRowIconWrap: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+
+  placeholderIconWrap: { width: 60, height: 60, borderRadius: 18, backgroundColor: '#101014', borderWidth: 1, borderColor: 'rgba(0,229,255,0.3)', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
+  placeholderTitle: { color: '#fff', fontWeight: '800', fontSize: 16, marginBottom: 8 },
+  placeholderDesc: { color: '#777', fontSize: 12, textAlign: 'center', lineHeight: 18, maxWidth: 280 },
+
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  modalSheet: { backgroundColor: '#101014', borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: '#1a1a22', paddingHorizontal: 18, paddingTop: 10, paddingBottom: 22 },
+  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#2a2a34', alignSelf: 'center', marginBottom: 14 },
+  modalHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
+  modalIconWrap: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#09090b', borderWidth: 1, borderColor: 'rgba(0,229,255,0.3)', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  modalTitle: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  modalSubtitle: { color: ACCENT, fontSize: 11, fontWeight: '600', marginTop: 2 },
+  modalCloseBtn: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22' },
+  modalFieldRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#1a1a22' },
+  modalFieldLabel: { color: '#777', fontSize: 11.5, fontWeight: '600', flex: 1 },
+  modalFieldValue: { color: '#fff', fontSize: 12.5, fontWeight: '600', flex: 1.4, textAlign: 'right' },
 });
