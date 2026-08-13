@@ -1400,7 +1400,7 @@ const styles = StyleSheet.create({
   errorBannerRetryText: { color: '#ff8080', fontSize: 10.5, fontWeight: '700' },
 
   statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  dashboardMetricItem: { backgroundColor: '#101014', width: '48%', height: 118, padding: 15, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'space-between' },
+  dashboardMetricItem: { backgroundColor: '#101014', width: '48%', height: 118, padding: 15, flex: 1, padding bottom: 80, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'space-between' },
   activeItemCard: { borderColor: ACCENT },
   metricIconWrap: { width: 30, height: 30, borderRadius: 9, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
   metricIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.1)' },
