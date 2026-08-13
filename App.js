@@ -33,8 +33,8 @@ import {
 // handles conversation + intent, Aether handles every live DynamoDB read/
 // write and PDF report generation.
 // ==========================================
-import { MayaAgent } from '@/src/agents/Maya';
-import { AetherAgent, ReportsVault } from '@/src/agents/Aether';
+import { MayaAgent } from './src/agents/Maya';
+import { AetherAgent, ReportsVault } from './src/agents/Aether';
 
 // Smooth native layout transitions on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
