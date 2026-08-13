@@ -7,10 +7,12 @@ import {
   RefreshControl,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
+import { NavigationContainer, useFocusEffect, DrawerActions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList, DrawerItem } from '@react-navigation/drawer';
+import { createDrawerNavigator, DrawerContentScrollView } from '@react-navigation/drawer';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { WebView } from 'react-native-webview';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Expo Modules — Notifications & Sharing. PDF generation now lives entirely
 // inside Aether.js (it owns expo-print + expo-file-system for reports), so
@@ -20,18 +22,16 @@ import * as Sharing from 'expo-sharing';
 
 // Vector Icons
 import {
-  Bot, Send, LogIn, LayoutDashboard, Globe,
-  User, Lock, TrendingUp, Container, Layers, LogOut, Eye, EyeOff,
-  Menu, FileText, Download, Anchor, Truck, Sliders, Settings, Plus, RefreshCw, Bell,
-  CheckCircle2, Clock, PackageCheck, AlertTriangle,
+  Bot, Send, LogIn, Home, User, Lock, TrendingUp, Container, Layers, LogOut,
+  Eye, EyeOff, Menu, FileText, Download, Anchor, Truck, Sliders, Settings,
+  Plus, RefreshCw, Clock, AlertTriangle, ChevronRight,
 } from 'lucide-react-native';
 
 // ==========================================
 // MAYA & AETHER — the two agents that do all the real work now.
 // App.js no longer holds any mock data or business logic of its own: Maya
 // handles conversation + intent, Aether handles every live DynamoDB read/
-// write and PDF report generation. See src/agents/Maya.js and
-// src/agents/Aether.js for the full implementation.
+// write and PDF report generation.
 // ==========================================
 import { MayaAgent } from '@/src/agents/Maya';
 import { AetherAgent, ReportsVault } from '@/src/agents/Aether';
@@ -53,7 +53,9 @@ Notifications.setNotificationHandler({
 const { width } = Dimensions.get('window');
 const Stack = createNativeStackNavigator();
 const Drawer = createDrawerNavigator();
+const Tab = createBottomTabNavigator();
 const ACCENT = '#00E5FF';
+const DANGER = '#FF5A5A';
 
 // One shared, stateless Aether instance for direct reads (Dashboard, Reports
 // Vault) and one that lives inside Maya for conversational CRUD — both just
@@ -80,7 +82,7 @@ const STATUS_PALETTE = [
   { backgroundColor: 'rgba(0,229,160,0.12)', borderColor: '#00E5A0' },
   { backgroundColor: 'rgba(0,229,255,0.12)', borderColor: ACCENT },
   { backgroundColor: 'rgba(255,184,0,0.12)', borderColor: '#FFB800' },
-  { backgroundColor: 'rgba(255,90,90,0.12)', borderColor: '#FF5A5A' },
+  { backgroundColor: 'rgba(255,90,90,0.12)', borderColor: DANGER },
   { backgroundColor: 'rgba(140,140,150,0.12)', borderColor: '#8a8a94' },
 ];
 const statusColor = (status) => {
@@ -136,28 +138,56 @@ async function scheduleDeviceNotification(delaySeconds, title, body) {
 
 // ==========================================
 // REUSABLE ANIMATED PRIMITIVES
+// Every touchable surface in the app routes through AnimatedPressable, so
+// the "light leak" press effect (a soft accent-colored flash that blooms in
+// on press and fades back out) is automatically consistent everywhere —
+// buttons, cards, chips, drawer rows, tab bar items, all of it.
 // ==========================================
-const AnimatedPressable = ({ onPress, style, children, disabled, hitSlop }) => {
+const AnimatedPressable = ({ onPress, style, children, disabled, hitSlop, leakColor = ACCENT }) => {
   const scale = useRef(new Animated.Value(1)).current;
-  const pressIn = () => Animated.spring(scale, { toValue: 0.94, useNativeDriver: true, speed: 40, bounciness: 6 }).start();
-  const pressOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 24, bounciness: 8 }).start();
+  const leak = useRef(new Animated.Value(0)).current;
+
+  const pressIn = () => {
+    Animated.spring(scale, { toValue: 0.95, useNativeDriver: true, speed: 40, bounciness: 6 }).start();
+    leak.stopAnimation();
+    leak.setValue(0);
+    Animated.timing(leak, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+  };
+  const pressOut = () => {
+    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 24, bounciness: 8 }).start();
+    Animated.timing(leak, { toValue: 0, duration: 420, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+  };
+
   return (
     <TouchableOpacity
-      activeOpacity={0.9}
+      activeOpacity={1}
       onPress={onPress}
       onPressIn={pressIn}
       onPressOut={pressOut}
       disabled={disabled}
       hitSlop={hitSlop || { top: 10, bottom: 10, left: 10, right: 10 }}
     >
-      <Animated.View style={[style, { transform: [{ scale }] }]}>{children}</Animated.View>
+      <Animated.View style={[style, { transform: [{ scale }], overflow: 'hidden' }]}>
+        {children}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              backgroundColor: leakColor,
+              opacity: leak.interpolate({ inputRange: [0, 1], outputRange: [0, 0.22] }),
+            },
+          ]}
+        />
+      </Animated.View>
     </TouchableOpacity>
   );
 };
 
-const IconButton = ({ onPress, children, style }) => (
+const IconButton = ({ onPress, children, style, leakColor }) => (
   <AnimatedPressable
     onPress={onPress}
+    leakColor={leakColor}
     hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
     style={[styles.iconButtonTarget, style]}
   >
@@ -245,18 +275,76 @@ const TypingDots = () => {
 // A small inline banner for non-fatal fetch errors, with a retry action.
 const ErrorBanner = ({ message, onRetry }) => (
   <View style={styles.errorBanner}>
-    <AlertTriangle size={16} color="#FF5A5A" style={{ marginRight: 10 }} />
+    <AlertTriangle size={16} color={DANGER} style={{ marginRight: 10 }} />
     <Text style={styles.errorBannerText}>{message}</Text>
     {onRetry && (
-      <AnimatedPressable onPress={onRetry} style={styles.errorBannerRetry}>
+      <AnimatedPressable onPress={onRetry} style={styles.errorBannerRetry} leakColor={DANGER}>
         <Text style={styles.errorBannerRetryText}>Retry</Text>
       </AnimatedPressable>
     )}
   </View>
 );
 
+// A generic screen header used by every secondary screen — hamburger always
+// dispatches DrawerActions so it works whether the screen sits directly
+// under the Drawer or is nested inside the bottom Tab navigator.
+const ScreenHeader = ({ navigation, title, right }) => (
+  <View style={styles.screenHeader}>
+    <IconButton onPress={() => navigation.dispatch(DrawerActions.openDrawer())} style={{ marginRight: 10 }}>
+      <Menu size={20} color={ACCENT} />
+    </IconButton>
+    <Text style={styles.screenHeaderTitle} numberOfLines={1}>{title}</Text>
+    <View style={{ flex: 1 }} />
+    {right}
+  </View>
+);
+
 // ==========================================
-// 1. LOGIN SCREEN
+// BRANDED FULL-SCREEN LOADING TRANSITION
+// Shown briefly between Login and the main app, and reusable anywhere a
+// "the system is doing something real" beat is useful.
+// ==========================================
+const BrandLoadingOverlay = ({ label = 'Initializing OGAMOTO CRM…' }) => {
+  const pulse = useRef(new Animated.Value(0.92)).current;
+  const rotate = useRef(new Animated.Value(0)).current;
+  const progress = useRef(new Animated.Value(0)).current;
+  const fade = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(fade, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1.08, duration: 700, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.92, duration: 700, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ])
+    ).start();
+    Animated.loop(
+      Animated.timing(rotate, { toValue: 1, duration: 2600, easing: Easing.linear, useNativeDriver: true })
+    ).start();
+    Animated.timing(progress, { toValue: 1, duration: 950, easing: Easing.out(Easing.cubic), useNativeDriver: false }).start();
+  }, []);
+
+  const spin = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+
+  return (
+    <Animated.View style={[styles.brandLoaderOverlay, { opacity: fade }]}>
+      <View style={styles.brandLoaderRingWrap}>
+        <Animated.View style={[styles.brandLoaderRing, { transform: [{ rotate: spin }] }]} />
+        <Animated.View style={[styles.brandLoaderBadge, { transform: [{ scale: pulse }] }]}>
+          <Bot size={26} color={ACCENT} />
+        </Animated.View>
+      </View>
+      <Text style={styles.brandLoaderText}>{label}</Text>
+      <View style={styles.brandLoaderTrack}>
+        <Animated.View style={[styles.brandLoaderFill, { width: progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) }]} />
+      </View>
+    </Animated.View>
+  );
+};
+
+// ==========================================
+// 1. LOGIN SCREEN — visually enhanced with layered glow, staggered field
+// entrance, and a branded loading transition into the app.
 // ==========================================
 const LoginScreen = ({ navigation }) => {
   const [username, setUsername] = useState('john@gmail.com');
@@ -264,55 +352,77 @@ const LoginScreen = ({ navigation }) => {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  const badgePulse = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(badgePulse, { toValue: 1.06, duration: 1400, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(badgePulse, { toValue: 1, duration: 1400, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+
   const handleLogin = () => {
     if (!username.trim() || !password.trim()) {
       Alert.alert('Authentication Error', 'Please enter valid credentials.');
       return;
     }
     setIsLoggingIn(true);
-    requestAnimationFrame(() => {
-      navigation.reset({ index: 0, routes: [{ name: 'MainDrawer' }] });
-    });
   };
+
+  useEffect(() => {
+    if (!isLoggingIn) return;
+    const t = setTimeout(() => {
+      navigation.reset({ index: 0, routes: [{ name: 'MainDrawer' }] });
+    }, 950);
+    return () => clearTimeout(t);
+  }, [isLoggingIn]);
 
   return (
     <SafeAreaView style={styles.loginContainer}>
+      <View style={styles.loginGlow} />
+      <View style={styles.loginGlowSecondary} />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' }}>
-        <View style={styles.loginGlow} />
         <FadeSlideIn style={styles.loginCard}>
-          <View style={styles.brandBadge}><Bot size={22} color={ACCENT} /></View>
-          <Text style={styles.loginBrandText}>OGAMOTO</Text>
-          <Text style={styles.loginTagline}>ENTERPRISE SYSTEM PORTAL</Text>
+          <Animated.View style={[styles.brandBadge, { transform: [{ scale: badgePulse }] }]}>
+            <Bot size={22} color={ACCENT} />
+          </Animated.View>
+          <Text style={styles.loginBrandText}>OGAMOTO CRM</Text>
+          <Text style={styles.loginTagline}>ENTERPRISE INTELLIGENCE PLATFORM</Text>
 
-          <View style={styles.inputWrapper}>
+          <FadeSlideIn delay={90} style={styles.inputWrapper}>
             <User size={15} color={ACCENT} style={styles.inputIcon} />
             <TextInput style={styles.authInputField} placeholder="Admin Identifier" placeholderTextColor="#4a4a55" value={username} onChangeText={setUsername} autoCapitalize="none" />
-          </View>
+          </FadeSlideIn>
 
-          <View style={styles.inputWrapper}>
+          <FadeSlideIn delay={160} style={styles.inputWrapper}>
             <Lock size={15} color={ACCENT} style={styles.inputIcon} />
             <TextInput style={styles.authInputField} placeholder="Access Key" placeholderTextColor="#4a4a55" secureTextEntry={!showPassword} value={password} onChangeText={setPassword} autoCapitalize="none" />
-            <IconButton onPress={() => setShowPassword(v => !v)} style={{ paddingHorizontal: 4 }}>
+            <IconButton onPress={() => setShowPassword(v => !v)} style={{ paddingHorizontal: 4, width: 34, height: 34 }}>
               {showPassword ? <EyeOff size={16} color="#555" /> : <Eye size={16} color="#555" />}
             </IconButton>
-          </View>
+          </FadeSlideIn>
 
-          <AnimatedPressable style={[styles.loginSubmitButton, isLoggingIn && styles.loginSubmitButtonDisabled]} onPress={handleLogin} disabled={isLoggingIn}>
-            {isLoggingIn ? <ActivityIndicator color="#09090b" /> : (
+          <FadeSlideIn delay={230}>
+            <AnimatedPressable style={[styles.loginSubmitButton, isLoggingIn && styles.loginSubmitButtonDisabled]} onPress={handleLogin} disabled={isLoggingIn}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <LogIn size={15} color="#09090b" style={{ marginRight: 8 }} />
                 <Text style={styles.loginButtonText}>INITIALIZE INTERFACE</Text>
               </View>
-            )}
-          </AnimatedPressable>
+            </AnimatedPressable>
+          </FadeSlideIn>
         </FadeSlideIn>
       </KeyboardAvoidingView>
+
+      {isLoggingIn && <BrandLoadingOverlay label="Signing into OGAMOTO CRM…" />}
     </SafeAreaView>
   );
 };
 
 // ==========================================
-// 2. DASHBOARD SCREEN — now backed entirely by live Aether reads
+// 2. DASHBOARD SCREEN — live Aether data, opens with a real greeting
 // ==========================================
 const FILTER_DAYS = { '7D': 7, '30D': 30, 'YTD': null };
 
@@ -417,15 +527,19 @@ const DashboardScreen = ({ navigation }) => {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCENT} colors={[ACCENT]} />}
       >
-        {/* Header */}
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 1 }}>
-            <IconButton onPress={() => navigation.openDrawer()} style={{ marginRight: 10 }}>
+        {/* Header: hamburger + brand + greeting */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', flexShrink: 1 }}>
+            <IconButton onPress={() => navigation.dispatch(DrawerActions.openDrawer())} style={{ marginRight: 10, marginTop: 2 }}>
               <Menu size={22} color={ACCENT} />
             </IconButton>
-            <View>
-              <Text style={styles.sectionHeading}>Executive Command</Text>
-              <Text style={styles.sectionEyebrow}>Live operational metrics</Text>
+            <View style={{ flexShrink: 1 }}>
+              <Text style={styles.brandMicroLabel}>OGAMOTO CRM</Text>
+              <Text style={styles.greetingText}>Hello Admin, I'm live.</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
+                <PulsingDot color="#00E5A0" size={7} />
+                <Text style={styles.liveSubText}>  Connected to Aether · {new Date().toLocaleDateString()}</Text>
+              </View>
             </View>
           </View>
           <IconButton onPress={onRefresh} style={styles.refreshBtn}>
@@ -564,7 +678,7 @@ const DashboardScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 3. MAYA AI CONSOLE SCREEN — now a real MayaAgent, not a local mock engine
+// 3. MAYA AI CONSOLE SCREEN — a real MayaAgent, not a local mock engine
 // ==========================================
 const MayaAgentConsoleScreen = ({ navigation }) => {
   const [messages, setMessages] = useState([
@@ -614,12 +728,7 @@ const MayaAgentConsoleScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.screenHeader}>
-        <IconButton onPress={() => navigation.openDrawer()} style={{ marginRight: 10 }}>
-          <Menu size={20} color={ACCENT} />
-        </IconButton>
-        <Text style={styles.screenHeaderTitle}>Maya AI Advisory & Ops</Text>
-      </View>
+      <ScreenHeader navigation={navigation} title="Maya AI Advisory & Ops" />
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90} style={{ flex: 1 }}>
         <FlatList
@@ -705,16 +814,15 @@ const ReportsVaultScreen = ({ navigation }) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.screenHeader}>
-        <IconButton onPress={() => navigation.openDrawer()} style={{ marginRight: 10 }}>
-          <Menu size={20} color={ACCENT} />
-        </IconButton>
-        <Text style={styles.screenHeaderTitle}>Reports Vault</Text>
-        <View style={{ flex: 1 }} />
-        <AnimatedPressable style={styles.generateReportBtn} onPress={generateFullReport} disabled={generating}>
-          {generating ? <ActivityIndicator size="small" color="#09090b" /> : <Plus size={16} color="#09090b" />}
-        </AnimatedPressable>
-      </View>
+      <ScreenHeader
+        navigation={navigation}
+        title="Reports Vault"
+        right={
+          <AnimatedPressable style={styles.generateReportBtn} onPress={generateFullReport} disabled={generating}>
+            {generating ? <ActivityIndicator size="small" color="#09090b" /> : <Plus size={16} color="#09090b" />}
+          </AnimatedPressable>
+        }
+      />
 
       <ScrollView contentContainerStyle={{ padding: 18 }}>
         {entries.length === 0 ? (
@@ -741,39 +849,125 @@ const ReportsVaultScreen = ({ navigation }) => {
 };
 
 // ==========================================
-// 5. CRM WEBVIEW PORTAL SCREEN
+// 5. CRM WEBVIEW PORTAL SCREEN — used for every "everything else" drawer item
 // ==========================================
 const CRMWebViewScreen = ({ navigation, route }) => {
   const targetUri = route.params?.uri || 'https://pap-crm.vercel.app/';
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.screenHeader}>
-        <IconButton onPress={() => navigation.openDrawer()} style={{ marginRight: 10 }}>
-          <Menu size={20} color={ACCENT} />
-        </IconButton>
-        <Text style={styles.screenHeaderTitle}>CRM Web Portal</Text>
-      </View>
+      <ScreenHeader navigation={navigation} title={route.name} />
       <WebView source={{ uri: targetUri }} style={{ flex: 1 }} startInLoadingState={true} />
     </SafeAreaView>
   );
 };
 
 // ==========================================
-// CUSTOM DRAWER MENU CONTENT
+// BOTTOM TAB BAR — Home / Maya / Reports, custom-built so it gets the same
+// light-leak press effect as everything else in the app.
 // ==========================================
-function CustomDrawerContent(props) {
+const TAB_META = {
+  Home: { label: 'Home', icon: Home },
+  MayaTab: { label: 'Maya', icon: Bot },
+  ReportsTab: { label: 'Reports', icon: FileText },
+};
+
+const CustomTabBar = ({ state, navigation }) => {
+  const insets = useSafeAreaInsets();
   return (
-    <DrawerContentScrollView {...props} style={{ backgroundColor: '#09090b' }}>
+    <View style={[styles.tabBarContainer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+      {state.routes.map((route, index) => {
+        const isFocused = state.index === index;
+        const meta = TAB_META[route.name];
+        const Icon = meta.icon;
+
+        const onPress = () => {
+          const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
+          if (!isFocused && !event.defaultPrevented) navigation.navigate(route.name);
+        };
+
+        return (
+          <AnimatedPressable key={route.key} onPress={onPress} style={styles.tabBarButton}>
+            <View style={[styles.tabIconWrap, isFocused && styles.tabIconWrapActive]}>
+              <Icon size={19} color={isFocused ? ACCENT : '#6b6b78'} />
+            </View>
+            <Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{meta.label}</Text>
+          </AnimatedPressable>
+        );
+      })}
+    </View>
+  );
+};
+
+function MainTabs() {
+  return (
+    <Tab.Navigator
+      tabBar={(props) => <CustomTabBar {...props} />}
+      screenOptions={{ headerShown: false }}
+    >
+      <Tab.Screen name="Home" component={DashboardScreen} />
+      <Tab.Screen name="MayaTab" component={MayaAgentConsoleScreen} />
+      <Tab.Screen name="ReportsTab" component={ReportsVaultScreen} />
+    </Tab.Navigator>
+  );
+}
+
+// ==========================================
+// CUSTOM DRAWER MENU CONTENT
+// Everything that isn't one of the three bottom tabs lives here, grouped
+// into clearly labeled, alphabetically sorted sections with consistent
+// icon/label alignment.
+// ==========================================
+const OPERATIONS_ITEMS = [
+  { label: 'Financing Partners', uri: 'https://pap-crm.vercel.app/financing', icon: Layers },
+  { label: 'Leads Pipeline', uri: 'https://pap-crm.vercel.app/leads', icon: TrendingUp },
+  { label: 'Logistics', uri: 'https://pap-crm.vercel.app/logistics', icon: Truck },
+  { label: 'Ports', uri: 'https://pap-crm.vercel.app/ports', icon: Anchor },
+  { label: 'Shipments', uri: 'https://pap-crm.vercel.app/shipments', icon: Container },
+  { label: 'Workflow Console', uri: 'https://pap-crm.vercel.app/workflow', icon: Sliders },
+].sort((a, b) => a.label.localeCompare(b.label));
+
+const DrawerRow = ({ icon: Icon, label, onPress, danger }) => (
+  <AnimatedPressable onPress={onPress} style={styles.drawerRow} leakColor={danger ? DANGER : ACCENT}>
+    <View style={[styles.drawerRowIconWrap, danger && styles.drawerRowIconWrapDanger]}>
+      <Icon size={16} color={danger ? DANGER : '#c9c9d4'} />
+    </View>
+    <Text style={[styles.drawerRowLabel, danger && styles.drawerRowLabelDanger]} numberOfLines={1}>{label}</Text>
+    {!danger && <ChevronRight size={15} color="#3a3a44" />}
+  </AnimatedPressable>
+);
+
+function CustomDrawerContent(props) {
+  const goTo = (name, params) => {
+    props.navigation.navigate(name, params);
+  };
+
+  return (
+    <DrawerContentScrollView {...props} style={{ backgroundColor: '#09090b' }} contentContainerStyle={{ flexGrow: 1, paddingTop: 0 }}>
       <View style={styles.drawerHeader}>
-        <Bot size={28} color={ACCENT} />
-        <Text style={styles.drawerBrandText}>OGAMOTO CRM</Text>
-        <Text style={styles.drawerUserText}>John Doe (Admin)</Text>
+        <View style={styles.drawerBrandRow}>
+          <View style={styles.drawerBrandBadge}><Bot size={20} color={ACCENT} /></View>
+          <View>
+            <Text style={styles.drawerBrandText}>OGAMOTO CRM</Text>
+            <Text style={styles.drawerUserText}>Admin Console · John Doe</Text>
+          </View>
+        </View>
       </View>
-      <DrawerItemList {...props} />
-      <DrawerItem
+
+      <Text style={styles.drawerSectionLabel}>OPERATIONS</Text>
+      {OPERATIONS_ITEMS.map((item) => (
+        <DrawerRow key={item.label} icon={item.icon} label={item.label} onPress={() => goTo(item.label)} />
+      ))}
+
+      <Text style={styles.drawerSectionLabel}>SYSTEM</Text>
+      <DrawerRow icon={Settings} label="Settings" onPress={() => goTo('Settings')} />
+
+      <View style={{ flex: 1, minHeight: 20 }} />
+
+      <View style={styles.drawerDivider} />
+      <DrawerRow
+        icon={LogOut}
         label="Logout"
-        icon={({ color }) => <LogOut size={17} color="#ff4d4d" />}
-        labelStyle={{ color: '#ff4d4d', fontWeight: '600' }}
+        danger
         onPress={() => props.navigation.reset({ index: 0, routes: [{ name: 'Login' }] })}
       />
     </DrawerContentScrollView>
@@ -781,7 +975,8 @@ function CustomDrawerContent(props) {
 }
 
 // ==========================================
-// MAIN DRAWER NAVIGATOR (SIDEBAR REPLACEMENT)
+// MAIN DRAWER NAVIGATOR — wraps the bottom tabs plus every other screen.
+// Opens on hamburger tap AND on an edge swipe from the left, out of the box.
 // ==========================================
 function MainDrawerNavigator() {
   return (
@@ -789,24 +984,19 @@ function MainDrawerNavigator() {
       drawerContent={(props) => <CustomDrawerContent {...props} />}
       screenOptions={{
         headerShown: false,
-        drawerStyle: { backgroundColor: '#09090b', width: 270 },
-        drawerActiveTintColor: ACCENT,
-        drawerInactiveTintColor: '#8a8a94',
-        drawerLabelStyle: { fontWeight: '600', fontSize: 13 },
-        drawerType: 'slide',
-        overlayColor: 'rgba(0,0,0,0.55)',
+        drawerStyle: { backgroundColor: '#09090b', width: 288 },
+        drawerType: 'front',
+        swipeEnabled: true,
+        swipeEdgeWidth: 60,
+        overlayColor: 'rgba(0,0,0,0.6)',
+        sceneContainerStyle: { backgroundColor: '#09090b' },
       }}
     >
-      <Drawer.Screen name="Dashboard" component={DashboardScreen} options={{ drawerIcon: ({ color }) => <LayoutDashboard size={18} color={color} /> }} />
-      <Drawer.Screen name="Maya AI Console" component={MayaAgentConsoleScreen} options={{ drawerIcon: ({ color }) => <Bot size={18} color={color} /> }} />
-      <Drawer.Screen name="Leads Pipeline" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/leads' }} options={{ drawerIcon: ({ color }) => <TrendingUp size={18} color={color} /> }} />
-      <Drawer.Screen name="Ports" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/ports' }} options={{ drawerIcon: ({ color }) => <Anchor size={18} color={color} /> }} />
-      <Drawer.Screen name="Shipments" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/shipments' }} options={{ drawerIcon: ({ color }) => <Container size={18} color={color} /> }} />
-      <Drawer.Screen name="Logistics" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/logistics' }} options={{ drawerIcon: ({ color }) => <Truck size={18} color={color} /> }} />
-      <Drawer.Screen name="Financing Partners" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/financing' }} options={{ drawerIcon: ({ color }) => <Layers size={18} color={color} /> }} />
-      <Drawer.Screen name="Workflow Console" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/workflow' }} options={{ drawerIcon: ({ color }) => <Sliders size={18} color={color} /> }} />
-      <Drawer.Screen name="Reports Vault" component={ReportsVaultScreen} options={{ drawerIcon: ({ color }) => <FileText size={18} color={color} /> }} />
-      <Drawer.Screen name="Settings" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/settings' }} options={{ drawerIcon: ({ color }) => <Settings size={18} color={color} /> }} />
+      <Drawer.Screen name="MainTabs" component={MainTabs} />
+      {OPERATIONS_ITEMS.map((item) => (
+        <Drawer.Screen key={item.label} name={item.label} component={CRMWebViewScreen} initialParams={{ uri: item.uri }} />
+      ))}
+      <Drawer.Screen name="Settings" component={CRMWebViewScreen} initialParams={{ uri: 'https://pap-crm.vercel.app/settings' }} />
     </Drawer.Navigator>
   );
 }
@@ -818,7 +1008,7 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#09090b' }}>
       <NavigationContainer>
-        <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade_from_bottom' }}>
+        <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="MainDrawer" component={MainDrawerNavigator} />
         </Stack.Navigator>
@@ -833,28 +1023,49 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#09090b' },
   screenHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#1a1a22', backgroundColor: '#09090b' },
-  screenHeaderTitle: { color: ACCENT, fontWeight: '800', fontSize: 15, letterSpacing: 0.4 },
+  screenHeaderTitle: { color: ACCENT, fontWeight: '800', fontSize: 15, letterSpacing: 0.4, flexShrink: 1 },
 
   iconButtonTarget: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
 
   loginContainer: { flex: 1, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
-  loginGlow: { position: 'absolute', width: width * 1.4, height: width * 1.4, borderRadius: width * 0.7, backgroundColor: ACCENT, opacity: 0.06, top: -width * 0.6 },
+  loginGlow: { position: 'absolute', width: width * 1.4, height: width * 1.4, borderRadius: width * 0.7, backgroundColor: ACCENT, opacity: 0.07, top: -width * 0.65, left: -width * 0.2 },
+  loginGlowSecondary: { position: 'absolute', width: width * 1.1, height: width * 1.1, borderRadius: width * 0.55, backgroundColor: '#00E5A0', opacity: 0.04, bottom: -width * 0.55, right: -width * 0.35 },
   loginCard: { width: width * 0.85, padding: 24, backgroundColor: '#101014', borderRadius: 22, borderWidth: 1, borderColor: '#1a1a22' },
-  brandBadge: { alignSelf: 'center', width: 46, height: 46, borderRadius: 14, backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  brandBadge: { alignSelf: 'center', width: 46, height: 46, borderRadius: 14, backgroundColor: '#09090b', borderWidth: 1, borderColor: 'rgba(0,229,255,0.35)', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
   loginBrandText: { fontSize: 26, fontWeight: '900', color: ACCENT, textAlign: 'center', letterSpacing: 4 },
-  loginTagline: { fontSize: 10, color: '#fff', opacity: 0.4, textAlign: 'center', letterSpacing: 2, marginBottom: 26, marginTop: 6 },
-  inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 13, marginBottom: 14, paddingHorizontal: 14 },
+  loginTagline: { fontSize: 9.5, color: '#fff', opacity: 0.4, textAlign: 'center', letterSpacing: 2, marginBottom: 26, marginTop: 6 },
+  inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#09090b', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 13, marginBottom: 14, paddingHorizontal: 14, overflow: 'hidden' },
   inputIcon: { marginRight: 10 },
   authInputField: { flex: 1, height: 46, color: '#fff', fontSize: 13 },
   loginSubmitButton: { backgroundColor: ACCENT, height: 48, borderRadius: 13, justifyContent: 'center', alignItems: 'center', marginTop: 8 },
   loginSubmitButtonDisabled: { opacity: 0.7 },
   loginButtonText: { color: '#09090b', fontWeight: '800', fontSize: 12, letterSpacing: 1 },
 
-  drawerHeader: { padding: 18, borderBottomWidth: 1, borderBottomColor: '#1a1a22', marginBottom: 8 },
-  drawerBrandText: { color: ACCENT, fontWeight: '900', fontSize: 17, marginTop: 8 },
-  drawerUserText: { color: '#666', fontSize: 11, marginTop: 2 },
+  brandLoaderOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: '#09090bF2', justifyContent: 'center', alignItems: 'center' },
+  brandLoaderRingWrap: { width: 84, height: 84, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
+  brandLoaderRing: { position: 'absolute', width: 84, height: 84, borderRadius: 42, borderWidth: 2.5, borderColor: 'rgba(0,229,255,0.15)', borderTopColor: ACCENT },
+  brandLoaderBadge: { width: 52, height: 52, borderRadius: 16, backgroundColor: '#101014', borderWidth: 1, borderColor: 'rgba(0,229,255,0.35)', justifyContent: 'center', alignItems: 'center' },
+  brandLoaderText: { color: '#ccc', fontSize: 12, fontWeight: '600', marginBottom: 18 },
+  brandLoaderTrack: { width: 160, height: 4, borderRadius: 2, backgroundColor: '#1a1a22', overflow: 'hidden' },
+  brandLoaderFill: { height: '100%', backgroundColor: ACCENT, borderRadius: 2 },
+
+  drawerHeader: { padding: 20, borderBottomWidth: 1, borderBottomColor: '#1a1a22', marginBottom: 10 },
+  drawerBrandRow: { flexDirection: 'row', alignItems: 'center' },
+  drawerBrandBadge: { width: 38, height: 38, borderRadius: 11, backgroundColor: '#101014', borderWidth: 1, borderColor: 'rgba(0,229,255,0.3)', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  drawerBrandText: { color: ACCENT, fontWeight: '900', fontSize: 15, letterSpacing: 0.5 },
+  drawerUserText: { color: '#666', fontSize: 10.5, marginTop: 2 },
+  drawerSectionLabel: { color: '#4a4a55', fontSize: 10, fontWeight: '800', letterSpacing: 1.4, paddingHorizontal: 20, marginTop: 14, marginBottom: 8 },
+  drawerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12, marginHorizontal: 10, borderRadius: 12 },
+  drawerRowIconWrap: { width: 32, height: 32, borderRadius: 9, backgroundColor: '#101014', borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'center', alignItems: 'center', marginRight: 13 },
+  drawerRowIconWrapDanger: { borderColor: 'rgba(255,90,90,0.35)' },
+  drawerRowLabel: { flex: 1, color: '#d6d6dc', fontSize: 12.5, fontWeight: '600' },
+  drawerRowLabelDanger: { color: DANGER },
+  drawerDivider: { height: 1, backgroundColor: '#1a1a22', marginHorizontal: 20, marginBottom: 8, marginTop: 4 },
 
   refreshBtn: { padding: 0, backgroundColor: '#101014', borderRadius: 12, borderWidth: 1, borderColor: '#1a1a22' },
+  brandMicroLabel: { color: ACCENT, fontSize: 9.5, fontWeight: '800', letterSpacing: 1.6, marginBottom: 4 },
+  greetingText: { fontSize: 19, fontWeight: '800', color: '#fff' },
+  liveSubText: { fontSize: 10.5, color: '#777', fontWeight: '600' },
   sectionHeading: { fontSize: 19, fontWeight: '800', color: '#fff' },
   sectionEyebrow: { fontSize: 10.5, color: '#666', marginTop: 2, fontWeight: '600' },
   sectionSubHeading: { fontSize: 11.5, fontWeight: '700', color: ACCENT, letterSpacing: 1 },
@@ -922,4 +1133,11 @@ const styles = StyleSheet.create({
   reportCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#101014', padding: 15, borderRadius: 15, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 11 },
   downloadBtn: { backgroundColor: ACCENT, width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
   generateReportBtn: { backgroundColor: ACCENT, width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+
+  tabBarContainer: { flexDirection: 'row', backgroundColor: '#0c0c10', borderTopWidth: 1, borderTopColor: '#1a1a22', paddingTop: 8, paddingHorizontal: 10 },
+  tabBarButton: { flex: 1, alignItems: 'center', paddingVertical: 4, borderRadius: 14 },
+  tabIconWrap: { width: 36, height: 36, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 3 },
+  tabIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.12)' },
+  tabLabel: { fontSize: 10, fontWeight: '700', color: '#6b6b78' },
+  tabLabelActive: { color: ACCENT },
 });
