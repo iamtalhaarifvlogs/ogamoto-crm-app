@@ -13,9 +13,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator, DrawerContentScrollView } from '@react-navigation/drawer';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
-// Expo Modules — Notifications & Sharing. PDF generation lives entirely
-// inside Aether.js (it owns expo-print + expo-file-system for reports), so
-// App.js only needs Sharing to hand a finished PDF to the OS share sheet.
+// Expo Modules — Notifications & Sharing
 import * as Notifications from 'expo-notifications';
 import * as Sharing from 'expo-sharing';
 
@@ -26,21 +24,13 @@ import {
   Plus, RefreshCw, Clock, AlertTriangle, ChevronRight, Search, X,
 } from 'lucide-react-native';
 
-// ==========================================
-// MAYA & AETHER — the two agents that do all the real work.
-// App.js holds no mock data or business logic of its own: Maya handles
-// conversation + intent, Aether handles every live DynamoDB read/write and
-// PDF report generation.
-// ==========================================
 import { MayaAgent } from './src/agents/Maya';
 import { AetherAgent, ReportsVault } from './src/agents/Aether';
 
-// Smooth native layout transitions on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-// Notification Handler Setup
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -55,15 +45,8 @@ const Drawer = createDrawerNavigator();
 const Tab = createBottomTabNavigator();
 const ACCENT = '#00E5FF';
 const DANGER = '#FF5A5A';
-// Visible build marker — shown small in the drawer footer and on the login
-// screen. Bump this string any time App.js changes. If the number on your
-// device doesn't match the one in this file, you are NOT running current
-// code — no amount of code fixing will show up until you rebuild clean.
-const BUILD_STAMP = 'build 2026-08-14.1';
+const BUILD_STAMP = 'build 2026-08-14.2';
 
-// One shared, stateless Aether instance for direct reads (Dashboard, entity
-// screens, Reports Vault) and one that lives inside Maya for conversational
-// CRUD — both just call the same live AWS endpoint, so sharing is safe.
 const sharedAether = new AetherAgent();
 
 let __taskSeq = 0;
@@ -74,11 +57,6 @@ const toNum = (v) => {
   return isNaN(n) ? 0 : n;
 };
 
-// Compact formatter (K/M/B/T) — used everywhere space is tight (cards,
-// chart labels, list rows). Large real-world numbers must NEVER be allowed
-// to render as a raw digit string here; that's what broke the dashboard
-// layout last time (a 10-digit number wrapped across 4 lines and stretched
-// its sibling card to match).
 const formatCompactMoney = (v) => {
   const n = toNum(v);
   const abs = Math.abs(n);
@@ -90,8 +68,6 @@ const formatCompactMoney = (v) => {
   return `${sign}$${abs.toFixed(0)}`;
 };
 
-// Full precision — reserved for the detail modal, where the user has
-// explicitly asked to see everything about one record.
 const formatFullMoney = (v) => `$${toNum(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
 const formatDetailValue = (value, type) => {
@@ -109,9 +85,6 @@ const formatDetailValue = (value, type) => {
 const buildDetailFields = (record, config) =>
   config.detailFields.map(([label, key, type]) => [label, formatDetailValue(record[key], type)]);
 
-// Stable, deterministic accent color for an arbitrary status string — since
-// real DynamoDB "stage" / "shipment_status" / "active_status" values aren't
-// a fixed enum, we can't hardcode a palette per literal label.
 const STATUS_PALETTE = [
   { backgroundColor: 'rgba(0,229,160,0.12)', borderColor: '#00E5A0' },
   { backgroundColor: 'rgba(0,229,255,0.12)', borderColor: ACCENT },
@@ -126,13 +99,6 @@ const statusColor = (status) => {
   return STATUS_PALETTE[hash % STATUS_PALETTE.length];
 };
 
-// ==========================================
-// DEVICE NOTIFICATION SCHEDULING
-// Maya decides WHAT to remind the user about (it returns a plain
-// { title, body, delaySeconds } request) — actually touching Expo's
-// notification APIs is App.js's job, since Maya.js is intentionally
-// platform-agnostic.
-// ==========================================
 async function ensureAndroidChannel() {
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('default', {
@@ -151,7 +117,6 @@ async function requestNotificationPermission() {
   return status === 'granted';
 }
 
-/** Returns true on success, or a user-facing error string on failure. */
 async function scheduleDeviceNotification(delaySeconds, title, body) {
   const granted = await requestNotificationPermission();
   if (!granted) {
@@ -170,12 +135,6 @@ async function scheduleDeviceNotification(delaySeconds, title, body) {
   return true;
 }
 
-// ==========================================
-// REUSABLE ANIMATED PRIMITIVES
-// Every touchable surface in the app routes through AnimatedPressable, so
-// the "light leak" press effect (a soft accent-colored flash that blooms in
-// on press and fades back out) is automatically consistent everywhere.
-// ==========================================
 const AnimatedPressable = ({ onPress, style, children, disabled, hitSlop, leakColor = ACCENT }) => {
   const scale = useRef(new Animated.Value(1)).current;
   const leak = useRef(new Animated.Value(0)).current;
@@ -198,7 +157,7 @@ const AnimatedPressable = ({ onPress, style, children, disabled, hitSlop, leakCo
       onPressIn={pressIn}
       onPressOut={pressOut}
       disabled={disabled}
-      hitSlop={hitSlop || { top: 10, bottom: 10, left: 10, right: 10 }}
+      hitSlop={hitSlop || { top: 8, bottom: 8, left: 8, right: 8 }}
     >
       <Animated.View style={[style, { transform: [{ scale }], overflow: 'hidden' }]}>
         {children}
@@ -221,7 +180,7 @@ const IconButton = ({ onPress, children, style, leakColor }) => (
   <AnimatedPressable
     onPress={onPress}
     leakColor={leakColor}
-    hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
     style={[styles.iconButtonTarget, style]}
   >
     {children}
@@ -305,7 +264,6 @@ const TypingDots = () => {
   );
 };
 
-// A small inline banner for non-fatal fetch errors, with a retry action.
 const ErrorBanner = ({ message, onRetry }) => (
   <View style={styles.errorBanner}>
     <AlertTriangle size={16} color={DANGER} style={{ marginRight: 10 }} />
@@ -318,9 +276,6 @@ const ErrorBanner = ({ message, onRetry }) => (
   </View>
 );
 
-// A generic screen header used by every secondary screen — hamburger always
-// dispatches DrawerActions so it works whether the screen sits directly
-// under the Drawer or is nested inside the bottom Tab navigator.
 const ScreenHeader = ({ navigation, title, right }) => (
   <View style={styles.screenHeader}>
     <IconButton onPress={() => navigation.dispatch(DrawerActions.openDrawer())} style={{ marginRight: 10 }}>
@@ -332,10 +287,6 @@ const ScreenHeader = ({ navigation, title, right }) => (
   </View>
 );
 
-// A bottom-sheet style modal for "view more details" on any record —
-// used by the Dashboard and every entity list screen alike, so tapping a
-// lead, shipment, financing partner, or logistics record always behaves
-// the same way anywhere in the app.
 const DetailModal = ({ visible, onClose, title, subtitle, icon: Icon, fields = [] }) => (
   <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
     <View style={styles.modalBackdrop}>
@@ -365,9 +316,6 @@ const DetailModal = ({ visible, onClose, title, subtitle, icon: Icon, fields = [
   </Modal>
 );
 
-// ==========================================
-// BRANDED FULL-SCREEN LOADING TRANSITION
-// ==========================================
 const BrandLoadingOverlay = ({ label = 'Initializing OGAMOTO CRM…' }) => {
   const pulse = useRef(new Animated.Value(0.92)).current;
   const rotate = useRef(new Animated.Value(0)).current;
@@ -406,9 +354,7 @@ const BrandLoadingOverlay = ({ label = 'Initializing OGAMOTO CRM…' }) => {
   );
 };
 
-// ==========================================
 // 1. LOGIN SCREEN
-// ==========================================
 const LoginScreen = ({ navigation }) => {
   const [username, setUsername] = useState('john@gmail.com');
   const [password, setPassword] = useState('abcd1234');
@@ -485,11 +431,7 @@ const LoginScreen = ({ navigation }) => {
   );
 };
 
-// ==========================================
-// 2. DASHBOARD SCREEN — live Aether data, greeting, and now genuinely
-// interactive: status chips filter the list below, and every row opens the
-// shared detail modal.
-// ==========================================
+// 2. DASHBOARD SCREEN
 const FILTER_DAYS = { '7D': 7, '30D': 30, 'YTD': null };
 
 const DashboardScreen = ({ navigation }) => {
@@ -553,7 +495,6 @@ const DashboardScreen = ({ navigation }) => {
   }, {});
   const statusKeys = Object.keys(statusBreakdown).slice(0, 4);
 
-  // Tapping a Pipeline Status chip filters the Recent Leads list below.
   const visibleLeads = selectedStage
     ? filteredLeads.filter(l => (l.stage || 'Unspecified') === selectedStage)
     : filteredLeads;
@@ -612,20 +553,19 @@ const DashboardScreen = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
-        contentContainerStyle={{ padding: 18, paddingBottom: 36 }}
+        contentContainerStyle={{ padding: 18, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ACCENT} colors={[ACCENT]} />}
       >
-        {/* Header: hamburger + brand + greeting */}
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start', flexShrink: 1 }}>
-            <IconButton onPress={() => navigation.dispatch(DrawerActions.openDrawer())} style={{ marginRight: 10, marginTop: 2 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 1 }}>
+            <IconButton onPress={() => navigation.dispatch(DrawerActions.openDrawer())} style={{ marginRight: 10 }}>
               <Menu size={22} color={ACCENT} />
             </IconButton>
             <View style={{ flexShrink: 1 }}>
               <Text style={styles.brandMicroLabel}>OGAMOTO CRM</Text>
-              <Text style={styles.greetingText}>Hello Admin, I'm live.</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
+              <Text style={styles.greetingText} numberOfLines={1}>Hello Admin, I'm live.</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
                 <PulsingDot color="#00E5A0" size={7} />
                 <Text style={styles.liveSubText}>  Connected to Aether · {new Date().toLocaleDateString()}</Text>
               </View>
@@ -638,26 +578,28 @@ const DashboardScreen = ({ navigation }) => {
 
         {error && <ErrorBanner message={error} onRetry={() => loadData()} />}
 
-        {/* Dynamic Metric Cards — compact formatting keeps these a fixed, sane height */}
         <View style={styles.statsRow}>
           <AnimatedPressable style={[styles.dashboardMetricItem, activeDomain === 'LEADS' && styles.activeItemCard]} onPress={() => changeDomain('LEADS')}>
             <View style={[styles.metricIconWrap, activeDomain === 'LEADS' && styles.metricIconWrapActive]}>
               <TrendingUp size={17} color={activeDomain === 'LEADS' ? ACCENT : '#666'} />
             </View>
-            <Text style={styles.dashboardMetricNumber} numberOfLines={1} adjustsFontSizeToFit>{formatCompactMoney(totalLeadValuation)}</Text>
-            <Text style={styles.dashboardMetricLabel}>Leads Value ({timeFilter})</Text>
+            <View style={{ marginTop: 8 }}>
+              <Text style={styles.dashboardMetricNumber} numberOfLines={1} adjustsFontSizeToFit>{formatCompactMoney(totalLeadValuation)}</Text>
+              <Text style={styles.dashboardMetricLabel} numberOfLines={2}>Leads Value ({timeFilter})</Text>
+            </View>
           </AnimatedPressable>
 
           <AnimatedPressable style={[styles.dashboardMetricItem, activeDomain === 'SHIPMENTS' && styles.activeItemCard]} onPress={() => changeDomain('SHIPMENTS')}>
             <View style={[styles.metricIconWrap, activeDomain === 'SHIPMENTS' && styles.metricIconWrapActive]}>
               <Container size={17} color={activeDomain === 'SHIPMENTS' ? ACCENT : '#666'} />
             </View>
-            <Text style={styles.dashboardMetricNumber} numberOfLines={1} adjustsFontSizeToFit>{shipments.length}</Text>
-            <Text style={styles.dashboardMetricLabel}>Total Shipments</Text>
+            <View style={{ marginTop: 8 }}>
+              <Text style={styles.dashboardMetricNumber} numberOfLines={1} adjustsFontSizeToFit>{shipments.length}</Text>
+              <Text style={styles.dashboardMetricLabel} numberOfLines={2}>Total Shipments</Text>
+            </View>
           </AnimatedPressable>
         </View>
 
-        {/* Time-Range Filter Bar */}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 22, marginBottom: 10 }}>
           <Text style={styles.sectionSubHeading}>Analytical Vector ({activeDomain})</Text>
           <View style={styles.timeFilterContainer}>
@@ -672,14 +614,13 @@ const DashboardScreen = ({ navigation }) => {
           <Text style={styles.filterNote}>Shipment data is real-time and not date-filtered.</Text>
         )}
 
-        {/* Interactive Animated Chart */}
         <View style={styles.graphContainerCanvas}>
           {chartData.length === 0 ? (
             <Text style={styles.emptyStateText}>No {activeDomain.toLowerCase()} in this range.</Text>
           ) : (
             <View style={styles.graphBarsAxisContainer}>
               {chartData.map((item, index) => {
-                const barHeight = Math.min(Math.max((item.value / chartMax) * 150, 20), 160);
+                const barHeight = Math.min(Math.max((item.value / chartMax) * 140, 20), 140);
                 return (
                   <View key={item.key || index} style={styles.individualBarColumn}>
                     <Text style={styles.barMarkerValueText}>{formatCompactMoney(item.value)}</Text>
@@ -692,7 +633,6 @@ const DashboardScreen = ({ navigation }) => {
           )}
         </View>
 
-        {/* Pipeline Status Breakdown — tap a chip to filter Recent Leads below */}
         <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Pipeline Status ({timeFilter}) · Tap to filter</Text>
         <View style={styles.statusRow}>
           {statusKeys.length === 0 ? (
@@ -709,7 +649,6 @@ const DashboardScreen = ({ navigation }) => {
           ))}
         </View>
 
-        {/* Recent Leads List — tap a row for full detail */}
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 22, marginBottom: 10 }}>
           <Text style={styles.sectionSubHeading}>Recent Leads{selectedStage ? ` · ${selectedStage}` : ''}</Text>
           {selectedStage && (
@@ -723,9 +662,9 @@ const DashboardScreen = ({ navigation }) => {
         ) : visibleLeads.map((lead, i) => (
           <FadeSlideIn key={lead.lead_id} delay={Math.min(i, 8) * 50} style={styles.leadRow}>
             <TouchableOpacity activeOpacity={0.8} style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={() => openLeadDetail(lead)}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.leadName}>{lead.name || 'Unnamed Lead'}</Text>
-                <Text style={styles.leadSub}>{lead.preferredVehicle || 'No vehicle set'} · {lead.createdAt ? new Date(lead.createdAt).toLocaleDateString() : '—'}</Text>
+              <View style={{ flex: 1, paddingRight: 6 }}>
+                <Text style={styles.leadName} numberOfLines={1}>{lead.name || 'Unnamed Lead'}</Text>
+                <Text style={styles.leadSub} numberOfLines={1}>{lead.preferredVehicle || 'No vehicle set'} · {lead.createdAt ? new Date(lead.createdAt).toLocaleDateString() : '—'}</Text>
               </View>
               <Text style={styles.leadDeposit}>{formatCompactMoney(lead.budget)}</Text>
               <View style={[styles.statusBadge, statusColor(lead.stage)]}>
@@ -736,7 +675,6 @@ const DashboardScreen = ({ navigation }) => {
           </FadeSlideIn>
         ))}
 
-        {/* Shipments Snapshot */}
         <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Cargo & Logistics</Text>
         <View style={styles.shipmentSummaryRow}>
           {shipmentStatusKeys.length === 0 ? (
@@ -752,9 +690,9 @@ const DashboardScreen = ({ navigation }) => {
           <FadeSlideIn key={s.shipment_id} delay={Math.min(i, 8) * 50} style={styles.shipmentRow}>
             <TouchableOpacity activeOpacity={0.8} style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={() => openShipmentDetail(s)}>
               <Container size={16} color="#8a8a94" style={{ marginRight: 10 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.leadName}>{s.shipment_number || 'Shipment'} · {s.vessel_name || 'Unassigned vessel'}</Text>
-                <Text style={styles.leadSub}>{s.origin_location || '—'} → {s.destination_country || '—'}</Text>
+              <View style={{ flex: 1, paddingRight: 6 }}>
+                <Text style={styles.leadName} numberOfLines={1}>{s.shipment_number || 'Shipment'} · {s.vessel_name || 'Unassigned vessel'}</Text>
+                <Text style={styles.leadSub} numberOfLines={1}>{s.origin_location || '—'} → {s.destination_country || '—'}</Text>
               </View>
               <Text style={styles.shipmentStatusText}>{s.shipment_status || 'Unspecified'}</Text>
               <ChevronRight size={15} color="#3a3a44" style={{ marginLeft: 6 }} />
@@ -762,7 +700,6 @@ const DashboardScreen = ({ navigation }) => {
           </FadeSlideIn>
         ))}
 
-        {/* Partner Ledger */}
         <Text style={[styles.sectionSubHeading, { marginTop: 22, marginBottom: 10 }]}>Financing Partner Ledger</Text>
         {financing.length === 0 ? (
           <Text style={styles.emptyStateText}>No financing partners on file yet.</Text>
@@ -792,9 +729,7 @@ const DashboardScreen = ({ navigation }) => {
   );
 };
 
-// ==========================================
 // 3. MAYA AI CONSOLE SCREEN
-// ==========================================
 const MayaAgentConsoleScreen = ({ navigation }) => {
   const [messages, setMessages] = useState([
     { id: 'seed-1', text: 'Greetings Executive. Maya & Aether core online. Direct me to process lead records, query manifests, schedule real-time reminders, or generate a report.', isBot: true }
@@ -882,9 +817,7 @@ const MayaAgentConsoleScreen = ({ navigation }) => {
   );
 };
 
-// ==========================================
 // 4. REPORTS VAULT SCREEN
-// ==========================================
 const ReportsVaultScreen = ({ navigation }) => {
   const [entries, setEntries] = useState(ReportsVault.list());
   const [generating, setGenerating] = useState(false);
@@ -960,12 +893,7 @@ const ReportsVaultScreen = ({ navigation }) => {
   );
 };
 
-// ==========================================
-// ENTITY UI CONFIG — drives every native list/detail screen below. Each
-// entry describes how to display and search one Aether entity; App.js needs
-// this display metadata regardless (Dashboard already hardcodes similar
-// mappings), so it's kept here rather than duplicated from Aether's schema.
-// ==========================================
+// ENTITY UI CONFIG
 const ENTITY_UI = {
   leads: {
     title: 'Leads Pipeline', icon: TrendingUp,
@@ -1029,13 +957,7 @@ const ENTITY_UI = {
   },
 };
 
-// ==========================================
-// 5. GENERIC ENTITY LIST SCREEN — powers Leads Pipeline, Shipments,
-// Financing Partners, Logistics, and Ports. Live Aether data, a search box,
-// dynamic status filter chips, pull-to-refresh, and tap-to-detail — every
-// drawer entity screen behaves identically because they're the same
-// component with different config.
-// ==========================================
+// 5. GENERIC ENTITY LIST SCREEN
 const EntityListScreen = ({ navigation, entityKey, config }) => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1135,7 +1057,7 @@ const EntityListScreen = ({ navigation, entityKey, config }) => {
             <FadeSlideIn key={item[config.idField] || i} delay={Math.min(i, 10) * 40} style={styles.entityRow}>
               <TouchableOpacity activeOpacity={0.8} style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={() => openDetail(item)}>
                 <View style={styles.entityRowIconWrap}><Icon size={16} color={ACCENT} /></View>
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 1, paddingRight: 6 }}>
                   <Text style={styles.leadName} numberOfLines={1}>{item[config.titleField] || config.title}</Text>
                   <Text style={styles.leadSub} numberOfLines={1}>
                     {config.subtitleFields.map((f) => item[f]).filter(Boolean).join(' · ') || '—'}
@@ -1170,10 +1092,7 @@ const FinancingScreen = (props) => <EntityListScreen {...props} entityKey="finan
 const LogisticsScreen = (props) => <EntityListScreen {...props} entityKey="logistics" config={ENTITY_UI.logistics} />;
 const PortsScreen = (props) => <EntityListScreen {...props} entityKey="ports" config={ENTITY_UI.ports} />;
 
-// ==========================================
-// PLACEHOLDER SCREEN — for drawer entries with no live data backing yet
-// (Workflow Console, Settings). Native and on-brand — no external website.
-// ==========================================
+// PLACEHOLDER SCREEN
 const PlaceholderScreen = ({ navigation, title, description, icon: Icon }) => (
   <SafeAreaView style={styles.container}>
     <ScreenHeader navigation={navigation} title={title} />
@@ -1193,9 +1112,7 @@ const SettingsScreen = (props) => (
     description="Account and system preferences are coming soon." />
 );
 
-// ==========================================
 // BOTTOM TAB BAR — Home / Maya / Reports
-// ==========================================
 const TAB_META = {
   Home: { label: 'Home', icon: Home },
   MayaTab: { label: 'Maya', icon: Bot },
@@ -1204,8 +1121,9 @@ const TAB_META = {
 
 const CustomTabBar = ({ state, navigation }) => {
   const insets = useSafeAreaInsets();
+  const bottomInset = Math.min(insets.bottom, 16);
   return (
-    <View style={[styles.tabBarContainer, { paddingBottom: Math.max(insets.bottom, 8) + 6 }]}>
+    <View style={[styles.tabBarContainer, { paddingBottom: bottomInset + 4 }]}>
       {state.routes.map((route, index) => {
         const isFocused = state.index === index;
         const meta = TAB_META[route.name];
@@ -1219,7 +1137,7 @@ const CustomTabBar = ({ state, navigation }) => {
         return (
           <AnimatedPressable key={route.key} onPress={onPress} style={styles.tabBarButton}>
             <View style={[styles.tabIconWrap, isFocused && styles.tabIconWrapActive]}>
-              <Icon size={25} color={isFocused ? ACCENT : '#6b6b78'} />
+              <Icon size={20} color={isFocused ? ACCENT : '#6b6b78'} />
             </View>
             <Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{meta.label}</Text>
           </AnimatedPressable>
@@ -1242,11 +1160,7 @@ function MainTabs() {
   );
 }
 
-// ==========================================
-// CUSTOM DRAWER MENU CONTENT — everything that isn't a bottom tab, grouped
-// into alphabetically sorted sections with consistent icon/label alignment.
-// Every item here is a real native Aether-backed screen — no external site.
-// ==========================================
+// CUSTOM DRAWER MENU CONTENT
 const OPERATIONS_ITEMS = [
   { label: 'Financing Partners', component: FinancingScreen, icon: Layers },
   { label: 'Leads Pipeline', component: LeadsPipelineScreen, icon: TrendingUp },
@@ -1303,10 +1217,7 @@ function CustomDrawerContent(props) {
   );
 }
 
-// ==========================================
-// MAIN DRAWER NAVIGATOR — wraps the bottom tabs plus every other screen.
-// Opens on hamburger tap AND on an edge swipe from the left, out of the box.
-// ==========================================
+// MAIN DRAWER NAVIGATOR
 function MainDrawerNavigator() {
   return (
     <Drawer.Navigator
@@ -1330,9 +1241,7 @@ function MainDrawerNavigator() {
   );
 }
 
-// ==========================================
 // ROOT APP
-// ==========================================
 export default function App() {
   return (
     <SafeAreaProvider>
@@ -1348,15 +1257,13 @@ export default function App() {
   );
 }
 
-// ==========================================
 // STYLESHEET
-// ==========================================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#09090b' },
   screenHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#1a1a22', backgroundColor: '#09090b' },
   screenHeaderTitle: { color: ACCENT, fontWeight: '800', fontSize: 15, letterSpacing: 0.4, flexShrink: 1 },
 
-  iconButtonTarget: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  iconButtonTarget: { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
 
   loginContainer: { flex: 1, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
   loginGlow: { position: 'absolute', width: width * 1.4, height: width * 1.4, borderRadius: width * 0.7, backgroundColor: ACCENT, opacity: 0.07, top: -width * 0.65, left: -width * 0.2 },
@@ -1395,9 +1302,9 @@ const styles = StyleSheet.create({
   drawerDivider: { height: 1, backgroundColor: '#1a1a22', marginHorizontal: 20, marginBottom: 8, marginTop: 4 },
   drawerBuildStamp: { color: '#3a3a44', fontSize: 9.5, textAlign: 'center', marginTop: 14, marginBottom: 6, letterSpacing: 0.5 },
 
-  refreshBtn: { padding: 0, backgroundColor: '#101014', borderRadius: 12, borderWidth: 1, borderColor: '#1a1a22' },
-  brandMicroLabel: { color: ACCENT, fontSize: 9.5, fontWeight: '800', letterSpacing: 1.6, marginBottom: 4 },
-  greetingText: { fontSize: 19, fontWeight: '800', color: '#fff' },
+  refreshBtn: { width: 36, height: 36, backgroundColor: '#101014', borderRadius: 10, borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'center', alignItems: 'center' },
+  brandMicroLabel: { color: ACCENT, fontSize: 9.5, fontWeight: '800', letterSpacing: 1.6, marginBottom: 2 },
+  greetingText: { fontSize: 18, fontWeight: '800', color: '#fff' },
   liveSubText: { fontSize: 10.5, color: '#777', fontWeight: '600' },
   sectionSubHeading: { fontSize: 11.5, fontWeight: '700', color: ACCENT, letterSpacing: 1 },
   filterNote: { color: '#666', fontSize: 10.5, marginBottom: 8, fontStyle: 'italic' },
@@ -1408,13 +1315,13 @@ const styles = StyleSheet.create({
   errorBannerRetry: { backgroundColor: 'rgba(255,90,90,0.18)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, marginLeft: 8 },
   errorBannerRetryText: { color: '#ff8080', fontSize: 10.5, fontWeight: '700' },
 
-  statsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  dashboardMetricItem: { backgroundColor: '#101014', width: '48%', height: 118, padding: 15, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'space-between', overflow: 'hidden' },
+  statsRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
+  dashboardMetricItem: { backgroundColor: '#101014', flex: 1, minHeight: 110, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: '#1a1a22', justifyContent: 'space-between' },
   activeItemCard: { borderColor: ACCENT },
-  metricIconWrap: { width: 30, height: 30, borderRadius: 9, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
+  metricIconWrap: { width: 32, height: 32, borderRadius: 9, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center' },
   metricIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.1)' },
-  dashboardMetricNumber: { fontSize: 20, fontWeight: '800', color: '#fff' },
-  dashboardMetricLabel: { color: '#777', fontSize: 10.5, fontWeight: '600' },
+  dashboardMetricNumber: { fontSize: 18, fontWeight: '800', color: '#fff' },
+  dashboardMetricLabel: { color: '#777', fontSize: 10.5, fontWeight: '600', marginTop: 2 },
 
   timeFilterContainer: { flexDirection: 'row', backgroundColor: '#101014', borderRadius: 8, padding: 2, borderWidth: 1, borderColor: '#1a1a22' },
   timeFilterBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
@@ -1425,31 +1332,31 @@ const styles = StyleSheet.create({
   systemStatusLedgerAlertBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 14, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginTop: 10 },
   ledgerIconWrap: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
 
-  graphContainerCanvas: { backgroundColor: '#101014', padding: 18, borderRadius: 18, borderWidth: 1, borderColor: '#1a1a22', minHeight: 200, justifyContent: 'flex-end' },
+  graphContainerCanvas: { backgroundColor: '#101014', padding: 16, borderRadius: 18, borderWidth: 1, borderColor: '#1a1a22', minHeight: 210, justifyContent: 'flex-end' },
   graphBarsAxisContainer: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'flex-end', width: '100%' },
-  individualBarColumn: { alignItems: 'center', maxWidth: 64 },
-  interactiveChartBarLine: { width: 28, backgroundColor: ACCENT, borderRadius: 6 },
-  barMarkerLabels: { color: '#666', fontSize: 9.5, marginTop: 9, fontWeight: '700' },
+  individualBarColumn: { alignItems: 'center', width: 55 },
+  interactiveChartBarLine: { width: 24, backgroundColor: ACCENT, borderRadius: 6 },
+  barMarkerLabels: { color: '#666', fontSize: 9.5, marginTop: 8, fontWeight: '700' },
   barMarkerValueText: { color: '#fff', fontSize: 9.5, marginBottom: 6, fontWeight: '600' },
   emptyStateText: { color: '#555', fontSize: 12, textAlign: 'center', paddingVertical: 30 },
 
-  statusRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  statusChip: { backgroundColor: '#101014', width: '48%', paddingVertical: 14, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', alignItems: 'center', marginBottom: 10 },
+  statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  statusChip: { backgroundColor: '#101014', flex: 1, minWidth: '45%', paddingVertical: 12, paddingHorizontal: 10, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', alignItems: 'center' },
   statusChipActive: { borderColor: ACCENT, backgroundColor: 'rgba(0,229,255,0.08)' },
   statusChipCount: { color: '#fff', fontWeight: '800', fontSize: 18 },
-  statusChipLabel: { color: '#777', fontSize: 10, marginTop: 3, fontWeight: '600', paddingHorizontal: 4 },
+  statusChipLabel: { color: '#777', fontSize: 10, marginTop: 2, fontWeight: '600', textAlign: 'center' },
 
-  leadRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 13, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
+  leadRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 12, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
   leadName: { color: '#fff', fontWeight: '700', fontSize: 12.5 },
   leadSub: { color: '#666', fontSize: 10.5, marginTop: 2 },
-  leadDeposit: { color: ACCENT, fontWeight: '700', fontSize: 12, marginRight: 10 },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, maxWidth: 100 },
+  leadDeposit: { color: ACCENT, fontWeight: '700', fontSize: 12, marginRight: 8 },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, maxWidth: 110 },
   statusBadgeText: { color: '#fff', fontSize: 9.5, fontWeight: '700' },
 
   shipmentSummaryRow: { flexDirection: 'row', marginBottom: 10, flexWrap: 'wrap' },
   shipmentSummaryChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, marginRight: 10, marginBottom: 6 },
   shipmentSummaryText: { color: '#ccc', fontSize: 11, marginLeft: 6, fontWeight: '600' },
-  shipmentRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 13, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
+  shipmentRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 12, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
   shipmentStatusText: { color: ACCENT, fontSize: 10.5, fontWeight: '700' },
 
   msgBubble: { padding: 13, borderRadius: 17, marginVertical: 5, maxWidth: '85%', flexDirection: 'row', alignItems: 'flex-start' },
@@ -1460,18 +1367,18 @@ const styles = StyleSheet.create({
   userMsgText: { color: '#09090b', fontWeight: '600' },
 
   inputContainer: { flexDirection: 'row', padding: 14, backgroundColor: '#09090b', borderTopWidth: 1, borderTopColor: '#1a1a22', alignItems: 'center' },
-  chatInput: { flex: 1, backgroundColor: '#101014', color: '#fff', paddingHorizontal: 16, height: 46, borderRadius: 23, marginRight: 10, borderWidth: 1, borderColor: '#1a1a22' },
+  chatInput: { flex: 1, backgroundColor: '#101014', color: '#fff', paddingHorizontal: 16, height: 44, borderRadius: 22, marginRight: 10, borderWidth: 1, borderColor: '#1a1a22' },
   sendButton: { backgroundColor: ACCENT, width: 42, height: 42, borderRadius: 21, justifyContent: 'center', alignItems: 'center' },
 
   reportCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#101014', padding: 15, borderRadius: 15, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 11 },
-  downloadBtn: { backgroundColor: ACCENT, width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  downloadBtn: { backgroundColor: ACCENT, width: 38, height: 38, borderRadius: 11, justifyContent: 'center', alignItems: 'center' },
   generateReportBtn: { backgroundColor: ACCENT, width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
 
-  tabBarContainer: { flexDirection: 'row', backgroundColor: '#0c0c10', borderTopWidth: 1, borderTopColor: '#1a1a22', paddingTop: 10, paddingHorizontal: 14 },
-  tabBarButton: { flex: 1, alignItems: 'center', paddingVertical: 6, borderRadius: 16 },
-  tabIconWrap: { width: '80%', height: 46, borderRadius: 15, justifyContent: 'center', alignItems: 'center', marginBottom: 5 },
+  tabBarContainer: { flexDirection: 'row', backgroundColor: '#0c0c10', borderTopWidth: 1, borderTopColor: '#1a1a22', paddingTop: 6, paddingHorizontal: 12 },
+  tabBarButton: { flex: 1, alignItems: 'center', paddingVertical: 4 },
+  tabIconWrap: { width: 44, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginBottom: 2 },
   tabIconWrapActive: { backgroundColor: 'rgba(0,229,255,0.14)' },
-  tabLabel: { fontSize: 11.5, fontWeight: '700', color: '#6b6b78' },
+  tabLabel: { fontSize: 10.5, fontWeight: '700', color: '#6b6b78' },
   tabLabelActive: { color: ACCENT },
 
   searchBarWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', borderWidth: 1, borderColor: '#1a1a22', borderRadius: 12, marginHorizontal: 18, marginTop: 14, paddingHorizontal: 12, height: 42 },
@@ -1481,7 +1388,7 @@ const styles = StyleSheet.create({
   filterChipActive: { backgroundColor: ACCENT, borderColor: ACCENT },
   filterChipText: { color: '#999', fontSize: 11, fontWeight: '700' },
   filterChipTextActive: { color: '#09090b' },
-  entityRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 13, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
+  entityRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#101014', padding: 12, borderRadius: 13, borderWidth: 1, borderColor: '#1a1a22', marginBottom: 8 },
   entityRowIconWrap: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#09090b', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
 
   placeholderIconWrap: { width: 60, height: 60, borderRadius: 18, backgroundColor: '#101014', borderWidth: 1, borderColor: 'rgba(0,229,255,0.3)', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
