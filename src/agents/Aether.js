@@ -23,7 +23,8 @@
 // ---------------------------------------------------------------------------
 
 import axios from 'axios';
-import RNHTMLtoPDF from 'react-native-html-to-pdf';
+import * as Print from 'expo-print';
+import * as FileSystem from 'expo-file-system';
 
 const DEFAULT_API = 'https://mbz2lmd7ud.execute-api.us-east-2.amazonaws.com/default/crm_data';
 const ACCENT = '#00E5FF';
@@ -566,19 +567,19 @@ export class AetherAgent {
 
     const html = buildReportHtml({ title, sections, notes, scopeLines });
 
-    const fileName = `OGAMOTO_${title.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 60)}_${Date.now()}`;
-    const file = await RNHTMLtoPDF.convert({
-      html,
-      fileName,
-      directory: 'Documents',
-      base64: false,
-    });
+    // expo-print writes to a randomly-named temp file — rename it to something
+    // human-readable and move it to cacheDirectory so it survives long enough
+    // to be shared/downloaded from the Reports Vault.
+    const { uri } = await Print.printToFileAsync({ html, base64: false });
+    const safeName = `OGAMOTO_${title.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 60)}_${Date.now()}.pdf`;
+    const destination = `${FileSystem.cacheDirectory}${safeName}`;
+    await FileSystem.copyAsync({ from: uri, to: destination });
 
     const vaultEntry = {
       id: generateId('REP'),
       title,
       generatedAt: nowIso(),
-      filePath: file.filePath,
+      filePath: destination,
       entities: targetEntities,
       recordCount: sections.reduce((s, sec) => s + sec.items.length, 0),
     };
@@ -588,7 +589,7 @@ export class AetherAgent {
       taskId,
       status: 'SUCCESS',
       action: 'GENERATE_PDF',
-      filePath: file.filePath,
+      filePath: destination,
       vaultEntry,
     };
   }
